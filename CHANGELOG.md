@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.4] - 2026-03-07
+
+### Fixed
+
+- **Fix `DrawStringAnchored` vertical anchor (`ay`) formula** — the formula
+  `y += h * ay` (inherited from fogleman/gg) did not match the documented
+  semantics `(0,0)=top-left, (0.5,0.5)=center, (1,1)=bottom-right`. Replaced
+  with the correct bounding-box anchor formula `y = y + ascent - ay * h` where
+  `h = ascent + descent` (visual bounding box, no lineGap). Research verified
+  against Cairo, Skia, and HTML Canvas baseline models.
+  ([#166](https://github.com/gogpu/gg/issues/166),
+  reported in [#159](https://github.com/gogpu/gg/issues/159) by
+  [@rcarlier](https://github.com/rcarlier))
+
+- **Fix `DrawStringWrapped` vertical anchor and height calculation** — same
+  formula fix applied. Block height now uses
+  `(n-1)*fh*lineSpacing + ascent + descent` (visual bounding box model).
+
+- **Fix `MeasureMultilineString` height calculation** — now returns visual
+  bounding box height consistent with `DrawStringWrapped`.
+
 ## [0.33.3] - 2026-03-07
 
 ### Changed

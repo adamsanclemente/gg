@@ -471,13 +471,143 @@ func TestDrawStringWrapped_HeightConsistency(t *testing.T) {
 	_, mh := dc.MeasureMultilineString(s, lineSpacing)
 
 	// The measured height should be consistent with what DrawStringWrapped uses.
-	// With anchor (0, 0) and (0, 1), the difference in y should equal the height.
-	fh := dc.fontHeight()
+	// Visual height = ascent + (n-1)*fh*lineSpacing + descent
+	metrics := dc.face.Metrics()
+	fh := metrics.LineHeight()
 	lines := splitLines(s)
 	n := float64(len(lines))
-	h := n*fh*lineSpacing - (lineSpacing-1)*fh
+	h := (n-1)*fh*lineSpacing + metrics.Ascent + metrics.Descent
 
 	if mh != h {
 		t.Errorf("MeasureMultilineString height (%f) != computed height (%f)", mh, h)
+	}
+}
+
+// --------------------------------------------------------------------------
+// DrawStringAnchored anchor correctness (issue #166)
+// --------------------------------------------------------------------------
+
+func TestDrawStringAnchored_AnchorSemantics(t *testing.T) {
+	fontPath := findTestFont()
+	if fontPath == "" {
+		t.Skip("No system font available")
+	}
+
+	dc := NewContext(400, 400)
+	defer dc.Close()
+	dc.ClearWithColor(White)
+
+	source, err := text.NewFontSourceFromFile(fontPath)
+	if err != nil {
+		t.Fatalf("Failed to load font: %v", err)
+	}
+	defer func() { _ = source.Close() }()
+
+	dc.SetFont(source.Face(24.0))
+	dc.SetRGB(0, 0, 0)
+
+	s := "Test"
+	metrics := dc.face.Metrics()
+	h := metrics.Ascent + metrics.Descent
+
+	// ay=0 → y is the TOP of the text → baseline should be at y + ascent.
+	// Draw at y=50 with ay=0: text should span [50, 50+h].
+	// Check: ink exists near y=50 (top), no ink above y=50.
+	dc.ClearWithColor(White)
+	dc.DrawStringAnchored(s, 50, 50, 0, 0)
+
+	hasInkAbove := false
+	for y := 0; y < 48; y++ {
+		for x := 40; x < 200; x++ {
+			p := dc.pixmap.GetPixel(x, y)
+			if p.R < 0.95 {
+				hasInkAbove = true
+			}
+		}
+	}
+	if hasInkAbove {
+		t.Error("ay=0: ink found above y=50, text should start AT y=50 (top-left)")
+	}
+
+	hasInkInRange := false
+	for y := 50; y < 50+int(h)+2; y++ {
+		for x := 40; x < 200; x++ {
+			p := dc.pixmap.GetPixel(x, y)
+			if p.R < 0.95 {
+				hasInkInRange = true
+			}
+		}
+	}
+	if !hasInkInRange {
+		t.Error("ay=0: no ink found in expected text range [50, 50+h]")
+	}
+
+	// ay=0.5 → y is the VERTICAL CENTER → text should be centered at y=200.
+	// Ink should exist both above and below y=200.
+	dc.ClearWithColor(White)
+	dc.DrawStringAnchored(s, 50, 200, 0, 0.5)
+
+	hasInkAboveCenter := false
+	for y := 200 - int(h); y < 200; y++ {
+		if y < 0 {
+			continue
+		}
+		for x := 40; x < 200; x++ {
+			p := dc.pixmap.GetPixel(x, y)
+			if p.R < 0.95 {
+				hasInkAboveCenter = true
+			}
+		}
+	}
+	hasInkBelowCenter := false
+	for y := 200; y < 200+int(h); y++ {
+		if y >= 400 {
+			break
+		}
+		for x := 40; x < 200; x++ {
+			p := dc.pixmap.GetPixel(x, y)
+			if p.R < 0.95 {
+				hasInkBelowCenter = true
+			}
+		}
+	}
+	if !hasInkAboveCenter {
+		t.Error("ay=0.5: no ink above y=200, text should be centered at y=200")
+	}
+	if !hasInkBelowCenter {
+		t.Error("ay=0.5: no ink below y=200, text should be centered at y=200")
+	}
+
+	// ay=1 → y is the BOTTOM of the text → all ink should be ABOVE y=350.
+	dc.ClearWithColor(White)
+	dc.DrawStringAnchored(s, 50, 350, 0, 1)
+
+	hasInkBelow := false
+	for y := 352; y < 400; y++ {
+		for x := 40; x < 200; x++ {
+			p := dc.pixmap.GetPixel(x, y)
+			if p.R < 0.95 {
+				hasInkBelow = true
+			}
+		}
+	}
+	if hasInkBelow {
+		t.Error("ay=1: ink found below y=350, bottom of text should be AT y=350")
+	}
+
+	hasInkAboveBottom := false
+	for y := 350 - int(h) - 2; y < 350; y++ {
+		if y < 0 {
+			continue
+		}
+		for x := 40; x < 200; x++ {
+			p := dc.pixmap.GetPixel(x, y)
+			if p.R < 0.95 {
+				hasInkAboveBottom = true
+			}
+		}
+	}
+	if !hasInkAboveBottom {
+		t.Error("ay=1: no ink found above y=350, text should end AT y=350")
 	}
 }
