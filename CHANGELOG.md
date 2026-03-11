@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.35.3] - 2026-03-11
 
+### Fixed
+
+- **MSDF atlas FontID collision when mixing fonts from same family** —
+  `computeFontID()` hashed `source.Name()` (family name, e.g., "Go") instead of
+  `parsed.FullName()` (e.g., "Go Regular" / "Go Bold"). Fonts within the same family
+  that share the same glyph count produced identical FontIDs, causing atlas cache
+  collisions: Bold glyphs silently overwrote Regular glyphs (or vice versa), resulting
+  in per-glyph weight inconsistency when rendering mixed-font text.
+
 ### Changed
 
 - Update gogpu v0.23.1 → v0.23.2 in examples (Retina contentsScale fix)
