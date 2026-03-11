@@ -56,6 +56,7 @@ type Context struct {
 	rasterizerMode RasterizerMode // CPU rasterizer selection mode
 
 	// Text rendering
+	textMode         TextMode               // text strategy selection (default: Auto)
 	outlineExtractor *text.OutlineExtractor // lazy: for transform-aware text (Strategy B)
 
 	// Lifecycle
@@ -262,6 +263,19 @@ func (c *Context) SetRasterizerMode(mode RasterizerMode) {
 // RasterizerMode returns the current rasterizer mode.
 func (c *Context) RasterizerMode() RasterizerMode {
 	return c.rasterizerMode
+}
+
+// SetTextMode sets the text rendering strategy.
+// See TextMode constants for available strategies.
+//
+// The mode is per-Context — different contexts can use different strategies.
+func (c *Context) SetTextMode(mode TextMode) {
+	c.textMode = mode
+}
+
+// TextMode returns the current text rendering strategy.
+func (c *Context) TextMode() TextMode {
+	return c.textMode
 }
 
 // Width returns the logical width of the context.

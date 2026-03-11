@@ -54,14 +54,28 @@ func (c *Context) DrawString(s string, x, y float64) {
 		return
 	}
 
-	// Try GPU text rendering first with user-space coordinates.
-	// The GPU pipeline receives the CTM and applies it in the vertex shader,
-	// so positions are passed in user space (not pre-transformed).
-	if c.tryGPUText(s, x, y) {
-		return
+	switch c.selectTextStrategy() {
+	case TextModeMSDF:
+		// Try GPU MSDF first; fall back to CPU if unavailable.
+		if c.tryGPUText(s, x, y) {
+			return
+		}
+		c.drawStringCPU(s, x, y)
+	case TextModeVector:
+		// Phase 3 will add GPU vector text via compute pipeline.
+		// For now, use CPU outline rendering (Strategy B).
+		c.flushGPUAccelerator()
+		c.drawStringAsOutlines(s, x, y)
+	case TextModeBitmap:
+		// Skip GPU entirely, use CPU pipeline directly.
+		c.flushGPUAccelerator()
+		c.drawStringCPU(s, x, y)
+	default: // TextModeAuto — current behavior
+		if c.tryGPUText(s, x, y) {
+			return
+		}
+		c.drawStringCPU(s, x, y)
 	}
-
-	c.drawStringCPU(s, x, y)
 }
 
 // tryGPUText attempts to render text via the GPU MSDF pipeline.
@@ -85,6 +99,14 @@ func (c *Context) tryGPUText(s string, x, y float64) bool {
 	target := c.gpuRenderTarget()
 	err := ta.DrawText(target, c.face, s, x, y, col, c.matrix, c.deviceScale)
 	return err == nil
+}
+
+// selectTextStrategy returns the effective text rendering strategy.
+// When TextModeAuto, it returns TextModeAuto to preserve the current
+// auto-selection behavior (try GPU MSDF first, then CPU).
+// Future: smarter auto-selection based on transform, size, animation state.
+func (c *Context) selectTextStrategy() TextMode {
+	return c.textMode
 }
 
 // DrawStringAnchored draws text with an anchor point.
@@ -113,13 +135,8 @@ func (c *Context) DrawStringAnchored(s string, x, y, ax, ay float64) {
 	x -= w * ax
 	y = y + metrics.Ascent - ay*h
 
-	// Try GPU text rendering first with user-space coordinates.
-	// The CTM is applied in the vertex shader.
-	if c.tryGPUText(s, x, y) {
-		return
-	}
-
-	c.drawStringCPU(s, x, y)
+	// Delegate to DrawString which handles TextMode routing.
+	c.DrawString(s, x, y)
 }
 
 // MeasureString returns the dimensions of text in pixels.
