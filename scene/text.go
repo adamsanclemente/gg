@@ -1,6 +1,8 @@
 package scene
 
 import (
+	"fmt"
+	"hash/fnv"
 	"sync"
 
 	"github.com/gogpu/gg/text"
@@ -21,6 +23,9 @@ type TextRenderer struct {
 
 	// config holds renderer configuration
 	config TextRendererConfig
+
+	// cache holds cached glyph outlines (lazy-initialized from global)
+	cache *text.GlyphCache
 }
 
 // TextRendererConfig holds configuration for TextRenderer.
@@ -77,6 +82,33 @@ func (r *TextRenderer) SetConfig(config TextRendererConfig) {
 	r.config = config
 }
 
+func (r *TextRenderer) ensureCache() *text.GlyphCache {
+	if r.cache == nil {
+		r.cache = text.GetGlobalGlyphCache()
+	}
+	return r.cache
+}
+
+func computeSceneTextFontID(source *text.FontSource) uint64 {
+	if source == nil {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "%s:%d", source.Name(), source.Parsed().NumGlyphs())
+	return h.Sum64()
+}
+
+func computeSizeKey(size float64) int16 {
+	switch {
+	case size < 0:
+		return 0
+	case size > 32767:
+		return 32767
+	default:
+		return int16(size) //nolint:gosec // bounds checked above
+	}
+}
+
 // RenderedGlyph represents a glyph that has been converted to a path.
 type RenderedGlyph struct {
 	// Path is the vector path representing the glyph outline.
@@ -115,12 +147,25 @@ func (r *TextRenderer) RenderGlyph(glyph text.ShapedGlyph, face text.Face) (*Ren
 		return nil, &text.FontError{Reason: "face has no font source"}
 	}
 	size := face.Size()
+	parsed := source.Parsed()
 
-	// Extract the outline
-	outline, err := r.extractor.ExtractOutline(source.Parsed(), glyph.GID, size)
-	if err != nil {
-		return nil, err
+	cache := r.ensureCache()
+	fontID := computeSceneTextFontID(source)
+	sizeKey := computeSizeKey(size)
+
+	cacheKey := text.OutlineCacheKey{
+		FontID:  fontID,
+		GID:     glyph.GID,
+		Size:    sizeKey,
+		Hinting: text.HintingNone,
 	}
+	outline := cache.GetOrCreate(cacheKey, func() *text.GlyphOutline {
+		o, err := r.extractor.ExtractOutline(parsed, glyph.GID, size)
+		if err != nil || o == nil || o.IsEmpty() {
+			return nil
+		}
+		return o
+	})
 
 	// Create the rendered glyph
 	rendered := &RenderedGlyph{
@@ -133,7 +178,7 @@ func (r *TextRenderer) RenderGlyph(glyph text.ShapedGlyph, face text.Face) (*Ren
 	}
 
 	// Handle empty outlines (like space)
-	if outline == nil || outline.IsEmpty() {
+	if outline == nil {
 		rendered.Path = nil
 		rendered.Bounds = EmptyRect()
 		return rendered, nil
@@ -166,6 +211,10 @@ func (r *TextRenderer) RenderGlyphs(glyphs []text.ShapedGlyph, face text.Face) (
 	size := face.Size()
 	parsed := source.Parsed()
 
+	cache := r.ensureCache()
+	fontID := computeSceneTextFontID(source)
+	sizeKey := computeSizeKey(size)
+
 	// Render all glyphs
 	rendered := make([]*RenderedGlyph, len(glyphs))
 	for i, glyph := range glyphs {
@@ -178,18 +227,21 @@ func (r *TextRenderer) RenderGlyphs(glyphs []text.ShapedGlyph, face text.Face) (
 			Cluster: glyph.Cluster,
 		}
 
-		// Extract outline
-		outline, err := r.extractor.ExtractOutline(parsed, glyph.GID, size)
-		if err != nil {
-			// Log error but continue - some glyphs may not have outlines
-			rg.Path = nil
-			rg.Bounds = EmptyRect()
-			rendered[i] = rg
-			continue
+		cacheKey := text.OutlineCacheKey{
+			FontID:  fontID,
+			GID:     glyph.GID,
+			Size:    sizeKey,
+			Hinting: text.HintingNone,
 		}
+		outline := cache.GetOrCreate(cacheKey, func() *text.GlyphOutline {
+			o, err := r.extractor.ExtractOutline(parsed, glyph.GID, size)
+			if err != nil || o == nil || o.IsEmpty() {
+				return nil
+			}
+			return o
+		})
 
-		// Handle empty outlines
-		if outline == nil || outline.IsEmpty() {
+		if outline == nil {
 			rg.Path = nil
 			rg.Bounds = EmptyRect()
 			rendered[i] = rg
@@ -271,10 +323,26 @@ func (r *TextRenderer) RenderTextToScene(s *Scene, str string, face text.Face, x
 	size := face.Size()
 	parsed := source.Parsed()
 
+	cache := r.ensureCache()
+	fontID := computeSceneTextFontID(source)
+	sizeKey := computeSizeKey(size)
+
 	// Render each glyph
 	for _, glyph := range shaped {
-		outline, err := r.extractor.ExtractOutline(parsed, glyph.GID, size)
-		if err != nil || outline == nil || outline.IsEmpty() {
+		cacheKey := text.OutlineCacheKey{
+			FontID:  fontID,
+			GID:     glyph.GID,
+			Size:    sizeKey,
+			Hinting: text.HintingNone,
+		}
+		outline := cache.GetOrCreate(cacheKey, func() *text.GlyphOutline {
+			o, err := r.extractor.ExtractOutline(parsed, glyph.GID, size)
+			if err != nil || o == nil || o.IsEmpty() {
+				return nil
+			}
+			return o
+		})
+		if outline == nil {
 			continue
 		}
 
