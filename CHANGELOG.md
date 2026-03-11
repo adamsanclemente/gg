@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.2] - 2026-03-11
+
+### Fixed
+
+- **GPU surface not cleared between frames (progressive drift on Retina)** —
+  `GPURenderSession.BeginFrame()` was never called, so `frameRendered` stayed `true`
+  after the first frame, causing all subsequent frames to use `LoadOpLoad` instead of
+  `LoadOpClear`. Previous frame content persisted and new shapes accumulated on top,
+  producing progressive stretching and drift on macOS Retina displays. Fix: add
+  `FrameAware` interface and `BeginAcceleratorFrame()`, called from
+  `ggcanvas.RenderDirect()`. Also auto-detect new frame via swapchain TextureView
+  pointer change in `SetSurfaceTarget`. Mid-frame flushes correctly use `LoadOpLoad`
+  to preserve previously drawn content.
+  ([#171](https://github.com/gogpu/gg/issues/171))
+
+- **TextModeVector text invisible with GPU SurfaceTarget** —
+  `drawStringAsOutlines()` rendered glyph outlines directly to CPU pixmap via
+  `renderer.Fill()`, bypassing the GPU pipeline. In zero-copy surface mode
+  (`ggcanvas.RenderDirect`), the pixmap was never composited onto the GPU surface.
+  Fix: route device-space glyph path through `doFill()` — the same multi-tier pipeline
+  used by all shapes (GPU stencil+cover → surface, or CPU fallback → pixmap). Also
+  removed unnecessary `flushGPUAccelerator()` call that created a mid-frame render pass
+  with `LoadOpClear`, wiping previously drawn content.
+  ([#184](https://github.com/gogpu/gg/issues/184))
+
+### Dependencies
+
+- Update wgpu v0.20.0 → v0.20.1 (Metal stencil attachment fix for Retina)
+
 ## [0.35.1] - 2026-03-11
 
 ### Changed
