@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collisions: Bold glyphs silently overwrote Regular glyphs (or vice versa), resulting
   in per-glyph weight inconsistency when rendering mixed-font text.
 
+### Added
+
+- Regression test for FontID collision (GoRegular vs GoBold same-family detection)
+
 ### Changed
 
 - Update gogpu v0.23.1 → v0.23.2 in examples (Retina contentsScale fix)
