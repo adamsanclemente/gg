@@ -83,7 +83,7 @@ func (c *Context) tryGPUText(s string, x, y float64) bool {
 	}
 	col := FromColor(c.currentColor())
 	target := c.gpuRenderTarget()
-	err := ta.DrawText(target, c.face, s, x, y, col, c.matrix)
+	err := ta.DrawText(target, c.face, s, x, y, col, c.matrix, c.deviceScale)
 	return err == nil
 }
 
