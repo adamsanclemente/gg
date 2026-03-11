@@ -58,6 +58,7 @@ type Context struct {
 	// Text rendering
 	textMode         TextMode               // text strategy selection (default: Auto)
 	outlineExtractor *text.OutlineExtractor // lazy: for transform-aware text (Strategy B)
+	glyphCache       *text.GlyphCache       // lazy: cached glyph outlines for drawStringAsOutlines
 
 	// Lifecycle
 	closed bool // Indicates whether Close has been called

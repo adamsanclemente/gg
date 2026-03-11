@@ -1,6 +1,8 @@
 package gg
 
 import (
+	"fmt"
+	"hash/fnv"
 	"strings"
 
 	"github.com/gogpu/gg/text"
@@ -354,12 +356,37 @@ func (c *Context) drawStringAsOutlines(s string, x, y float64) {
 	parsed := source.Parsed()
 	fontSize := c.face.Size()
 
+	// Use glyph cache to avoid repeated outline extraction.
+	cache := c.ensureGlyphCache()
+	fontID := computeTextFontID(source)
+	var sizeKey int16
+	switch {
+	case fontSize < 0:
+		sizeKey = 0
+	case fontSize > 32767:
+		sizeKey = 32767
+	default:
+		sizeKey = int16(fontSize) //nolint:gosec // bounds checked above
+	}
+
 	path := NewPath()
 	hasContour := false
 
 	for glyph := range c.face.Glyphs(s) {
-		outline, err := extractor.ExtractOutline(parsed, glyph.GID, fontSize)
-		if err != nil || outline == nil || outline.IsEmpty() {
+		cacheKey := text.OutlineCacheKey{
+			FontID:  fontID,
+			GID:     glyph.GID,
+			Size:    sizeKey,
+			Hinting: text.HintingNone,
+		}
+		outline := cache.GetOrCreate(cacheKey, func() *text.GlyphOutline {
+			o, err := extractor.ExtractOutline(parsed, glyph.GID, fontSize)
+			if err != nil || o == nil || o.IsEmpty() {
+				return nil
+			}
+			return o
+		})
+		if outline == nil {
 			continue // space/missing glyph — advance handled by Glyphs iterator
 		}
 
@@ -420,6 +447,27 @@ func (c *Context) ensureOutlineExtractor() *text.OutlineExtractor {
 		c.outlineExtractor = text.NewOutlineExtractor()
 	}
 	return c.outlineExtractor
+}
+
+// ensureGlyphCache lazily initializes the glyph cache reference.
+// Uses the global shared cache to benefit from cross-Context reuse.
+func (c *Context) ensureGlyphCache() *text.GlyphCache {
+	if c.glyphCache == nil {
+		c.glyphCache = text.GetGlobalGlyphCache()
+	}
+	return c.glyphCache
+}
+
+// computeTextFontID generates a stable hash identifier for a font source.
+// Uses FNV-1a hash of font name and glyph count as a lightweight fingerprint.
+// Same algorithm as internal/gpu/gpu_text.go:computeFontID.
+func computeTextFontID(source *text.FontSource) uint64 {
+	if source == nil {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "%s:%d", source.Name(), source.Parsed().NumGlyphs())
+	return h.Sum64()
 }
 
 // fontHeight returns the font's natural line height (ascent + descent + line gap).
