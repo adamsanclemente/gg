@@ -447,15 +447,30 @@ func (r *Renderer) renderTile(tile *parallel.Tile, enc *Encoding, _ *gg.Pixmap) 
 	tile.Dirty = true
 }
 
+// tileClipState holds the state for one level of clip nesting during tile rendering.
+// Each BeginClip pushes a new state onto the per-tile clip stack; EndClip pops it
+// and composites the clipped content back onto the parent pixmap.
+type tileClipState struct {
+	mask    []byte     // R8 alpha mask (tileW * tileH)
+	savedPM *gg.Pixmap // the pixmap we were drawing to before this clip
+}
+
 // executeEncodingOnTile executes encoding commands on a single tile, delegating
 // rasterization to gg.SoftwareRenderer for analytic anti-aliased output.
 //
-//nolint:gocyclo,cyclop // Command interpreter with multiple cases is inherently complex
+//nolint:gocyclo,cyclop,gocognit,funlen // Command interpreter with multiple cases is inherently complex
 func (r *Renderer) executeEncodingOnTile(dec *Decoder, tile *parallel.Tile, pm *gg.Pixmap, sr *gg.SoftwareRenderer) {
 	var currentPath *Path
 	currentTransform := IdentityAffine()
 
 	tileX, tileY, _, _ := tile.Bounds()
+
+	// activePM is the pixmap we currently render into. It starts as the tile
+	// pixmap but may be swapped to a temporary pixmap inside clip regions.
+	activePM := pm
+
+	// clipStack tracks nested clip states for BeginClip/EndClip pairs.
+	var clipStack []tileClipState
 
 	for dec.Next() {
 		switch dec.Tag() {
@@ -509,7 +524,7 @@ func (r *Renderer) executeEncodingOnTile(dec *Decoder, tile *parallel.Tile, pm *
 			if currentPath != nil && !currentPath.IsEmpty() {
 				ggPath := convertPath(currentPath, tileX, tileY)
 				paint := convertFillPaint(brush, style)
-				_ = sr.Fill(pm, ggPath, paint)
+				_ = sr.Fill(activePM, ggPath, paint)
 			}
 
 		case TagFillRoundRect:
@@ -521,7 +536,7 @@ func (r *Renderer) executeEncodingOnTile(dec *Decoder, tile *parallel.Tile, pm *
 			if currentPath != nil && !currentPath.IsEmpty() {
 				ggPath := convertPath(currentPath, tileX, tileY)
 				paint := convertStrokePaint(brush, style)
-				_ = sr.Stroke(pm, ggPath, paint)
+				_ = sr.Stroke(activePM, ggPath, paint)
 			}
 
 		case TagPushLayer:
@@ -532,10 +547,51 @@ func (r *Renderer) executeEncodingOnTile(dec *Decoder, tile *parallel.Tile, pm *
 			// Layer pop - skip for now
 
 		case TagBeginClip:
-			// Clip management - skip for now
+			tileW := activePM.Width()
+			tileH := activePM.Height()
+
+			if currentPath != nil && !currentPath.IsEmpty() {
+				// 1. Render clip path as white on a temporary pixmap to get coverage.
+				maskPM := r.pool.getPixmap(tileW, tileH)
+				clipGGPath := convertPath(currentPath, tileX, tileY)
+				whitePaint := gg.NewPaint()
+				whitePaint.SetBrush(gg.Solid(gg.RGBA{R: 1, G: 1, B: 1, A: 1}))
+				_ = sr.Fill(maskPM, clipGGPath, whitePaint)
+
+				// 2. Extract alpha channel as R8 mask.
+				clipMask := extractAlphaMask(maskPM)
+				r.pool.putPixmap(maskPM)
+
+				// 3. Save current pixmap and allocate a fresh one for clipped content.
+				savedPM := activePM
+				activePM = r.pool.getPixmap(tileW, tileH)
+
+				// 4. Push clip state.
+				clipStack = append(clipStack, tileClipState{mask: clipMask, savedPM: savedPM})
+			} else {
+				// Empty clip path clips everything (fully transparent mask).
+				clipMask := make([]byte, tileW*tileH)
+				savedPM := activePM
+				activePM = r.pool.getPixmap(tileW, tileH)
+				clipStack = append(clipStack, tileClipState{mask: clipMask, savedPM: savedPM})
+			}
+			currentPath = nil // consumed by clip
 
 		case TagEndClip:
-			// Clip end - skip for now
+			if len(clipStack) > 0 {
+				state := clipStack[len(clipStack)-1]
+				clipStack = clipStack[:len(clipStack)-1]
+
+				// Apply alpha mask to clipped content.
+				applyAlphaMask(activePM, state.mask)
+
+				// Composite masked content onto the saved pixmap (source-over).
+				compositePixmaps(state.savedPM, activePM)
+
+				// Return the temporary pixmap and restore the saved one.
+				r.pool.putPixmap(activePM)
+				activePM = state.savedPM
+			}
 
 		case TagImage:
 			// Image rendering - skip for now
@@ -545,6 +601,95 @@ func (r *Renderer) executeEncodingOnTile(dec *Decoder, tile *parallel.Tile, pm *
 			// Brush definition - skip for now
 			_, _, _, _ = dec.Brush()
 		}
+	}
+
+	// Safety: if clip stack is not empty (unbalanced clips), composite remaining.
+	for len(clipStack) > 0 {
+		state := clipStack[len(clipStack)-1]
+		clipStack = clipStack[:len(clipStack)-1]
+		applyAlphaMask(activePM, state.mask)
+		compositePixmaps(state.savedPM, activePM)
+		r.pool.putPixmap(activePM)
+		activePM = state.savedPM
+	}
+
+	// If activePM differs from pm (shouldn't happen with balanced clips, but be safe),
+	// copy data back to the original tile pixmap.
+	if activePM != pm {
+		copy(pm.Data(), activePM.Data())
+		r.pool.putPixmap(activePM)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Clip Helpers (alpha mask compositing)
+// ---------------------------------------------------------------------------
+
+// extractAlphaMask extracts the alpha channel from a pixmap as a byte slice.
+// The result has one byte per pixel (R8 coverage), suitable for clip masking.
+func extractAlphaMask(pm *gg.Pixmap) []byte {
+	data := pm.Data()
+	pixelCount := pm.Width() * pm.Height()
+	mask := make([]byte, pixelCount)
+	for i := range mask {
+		mask[i] = data[i*4+3] // alpha channel (offset 3 in RGBA)
+	}
+	return mask
+}
+
+// applyAlphaMask multiplies each pixel's channels by the corresponding mask value.
+// Both the pixel data and mask use premultiplied alpha, so all four channels
+// (R, G, B, A) are scaled by mask/255.
+//
+//nolint:gosec // G115: Integer overflow is not possible - math is bounded to [0,255]
+func applyAlphaMask(pm *gg.Pixmap, mask []byte) {
+	data := pm.Data()
+	for i := 0; i < len(mask) && i*4+3 < len(data); i++ {
+		m := uint32(mask[i])
+		if m == 0 {
+			data[i*4] = 0
+			data[i*4+1] = 0
+			data[i*4+2] = 0
+			data[i*4+3] = 0
+		} else if m < 255 {
+			// Premultiplied alpha: multiply all channels by mask/255.
+			// Uses +127 for correct rounding (matches Skia/Cairo convention).
+			data[i*4] = uint8((uint32(data[i*4])*m + 127) / 255)
+			data[i*4+1] = uint8((uint32(data[i*4+1])*m + 127) / 255)
+			data[i*4+2] = uint8((uint32(data[i*4+2])*m + 127) / 255)
+			data[i*4+3] = uint8((uint32(data[i*4+3])*m + 127) / 255)
+		}
+		// m == 255: no change needed
+	}
+}
+
+// compositePixmaps composites src onto dst using premultiplied source-over.
+// Formula: dst' = src + dst * (1 - srcAlpha)
+//
+//nolint:gosec // G115: Integer overflow is not possible - math is bounded to [0,255]
+func compositePixmaps(dst, src *gg.Pixmap) {
+	dstData := dst.Data()
+	srcData := src.Data()
+	n := min(len(dstData), len(srcData))
+	for i := 0; i < n; i += 4 {
+		sa := srcData[i+3]
+		if sa == 0 {
+			continue // Fully transparent source, keep destination
+		}
+		if sa == 255 {
+			// Fully opaque source, overwrite destination (fast path)
+			dstData[i] = srcData[i]
+			dstData[i+1] = srcData[i+1]
+			dstData[i+2] = srcData[i+2]
+			dstData[i+3] = srcData[i+3]
+			continue
+		}
+		// Premultiplied source-over: dst' = src + dst * (1 - srcAlpha)
+		invAlpha := 255 - uint32(sa)
+		dstData[i] = srcData[i] + uint8((uint32(dstData[i])*invAlpha+127)/255)
+		dstData[i+1] = srcData[i+1] + uint8((uint32(dstData[i+1])*invAlpha+127)/255)
+		dstData[i+2] = srcData[i+2] + uint8((uint32(dstData[i+2])*invAlpha+127)/255)
+		dstData[i+3] = srcData[i+3] + uint8((uint32(dstData[i+3])*invAlpha+127)/255)
 	}
 }
 

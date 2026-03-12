@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `TagFillRoundRect` encoding tag with dedicated encoder/decoder
   - `SceneBuilder.FillRoundRect()` convenience method
   - SDF-based `Contains()` for hit testing
+- **Scene clip support (BeginClip/EndClip)** — implemented clip regions in the tile
+  renderer using alpha mask compositing (Cairo/Skia pattern). Clip path is rendered to
+  R8 coverage mask, content renders to temporary pixmap, EndClip applies mask and
+  composites back. Supports nested clips, arbitrary clip shapes, and transforms.
+  - `SceneBuilder.Clip(shape, fn)` now fully functional
+  - Safety cleanup for unbalanced clip stacks
 
 ### Fixed
 

@@ -882,3 +882,407 @@ func TestConvertStrokePaintNilStyle(t *testing.T) {
 		t.Errorf("default MiterLimit = %f, want 10.0", s.MiterLimit)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Clip Tests (#190)
+// ---------------------------------------------------------------------------
+
+// TestClipBasic verifies that a clip region restricts drawing to the clip shape.
+// A full-canvas red fill clipped to a centered rectangle should only produce
+// red pixels inside the clip region.
+func TestClipBasic(t *testing.T) {
+	const size = 200
+	r := NewRenderer(size, size)
+	if r == nil {
+		t.Fatal("NewRenderer returned nil")
+	}
+	defer r.Close()
+
+	target := gg.NewPixmap(size, size)
+
+	s := NewScene()
+
+	// Fill entire canvas blue (background).
+	s.Fill(FillNonZero, IdentityAffine(),
+		SolidBrush(gg.RGBA{R: 0, G: 0, B: 1, A: 1}),
+		NewRectShape(0, 0, float32(size), float32(size)))
+
+	// Clip to a centered 60x60 rectangle.
+	clipRect := NewRectShape(70, 70, 60, 60)
+	s.PushClip(clipRect)
+
+	// Fill entire canvas red — should only appear inside the clip.
+	s.Fill(FillNonZero, IdentityAffine(),
+		SolidBrush(gg.RGBA{R: 1, G: 0, B: 0, A: 1}),
+		NewRectShape(0, 0, float32(size), float32(size)))
+
+	s.PopClip()
+
+	if err := r.Render(target, s); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	// Center (100, 100) is inside the clip — should be red.
+	center := target.GetPixel(100, 100)
+	if center.R < 0.9 || center.A < 0.9 {
+		t.Errorf("clip interior (100,100) = %+v, want opaque red", center)
+	}
+
+	// Corner (10, 10) is outside the clip — should remain blue.
+	corner := target.GetPixel(10, 10)
+	if corner.B < 0.9 || corner.A < 0.9 {
+		t.Errorf("clip exterior (10,10) = %+v, want opaque blue", corner)
+	}
+	if corner.R > 0.1 {
+		t.Errorf("clip exterior (10,10) red = %.2f, want <= 0.1 (clip leak)", corner.R)
+	}
+}
+
+// TestClipNested verifies that two nested clips produce the intersection
+// of both clip regions.
+func TestClipNested(t *testing.T) {
+	const size = 200
+	r := NewRenderer(size, size)
+	if r == nil {
+		t.Fatal("NewRenderer returned nil")
+	}
+	defer r.Close()
+
+	target := gg.NewPixmap(size, size)
+
+	s := NewScene()
+
+	// Outer clip: left half (0-100).
+	s.PushClip(NewRectShape(0, 0, 100, float32(size)))
+
+	// Inner clip: top half (0-100).
+	s.PushClip(NewRectShape(0, 0, float32(size), 100))
+
+	// Fill entire canvas green — should only appear in top-left quadrant.
+	s.Fill(FillNonZero, IdentityAffine(),
+		SolidBrush(gg.RGBA{R: 0, G: 1, B: 0, A: 1}),
+		NewRectShape(0, 0, float32(size), float32(size)))
+
+	s.PopClip()
+	s.PopClip()
+
+	if err := r.Render(target, s); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	// Top-left quadrant (50, 50) — inside both clips, should be green.
+	tl := target.GetPixel(50, 50)
+	if tl.G < 0.9 || tl.A < 0.9 {
+		t.Errorf("top-left (50,50) = %+v, want opaque green", tl)
+	}
+
+	// Top-right quadrant (150, 50) — outside outer clip, should be transparent.
+	tr := target.GetPixel(150, 50)
+	if tr.A > 0.1 {
+		t.Errorf("top-right (150,50) alpha = %.2f, want transparent (outside outer clip)", tr.A)
+	}
+
+	// Bottom-left quadrant (50, 150) — outside inner clip, should be transparent.
+	bl := target.GetPixel(50, 150)
+	if bl.A > 0.1 {
+		t.Errorf("bottom-left (50,150) alpha = %.2f, want transparent (outside inner clip)", bl.A)
+	}
+
+	// Bottom-right (150, 150) — outside both clips.
+	br := target.GetPixel(150, 150)
+	if br.A > 0.1 {
+		t.Errorf("bottom-right (150,150) alpha = %.2f, want transparent", br.A)
+	}
+}
+
+// TestClipRestore verifies that drawing after EndClip is NOT clipped.
+func TestClipRestore(t *testing.T) {
+	const size = 200
+	r := NewRenderer(size, size)
+	if r == nil {
+		t.Fatal("NewRenderer returned nil")
+	}
+	defer r.Close()
+
+	target := gg.NewPixmap(size, size)
+
+	s := NewScene()
+
+	// Clip to a small rectangle and fill red.
+	s.PushClip(NewRectShape(80, 80, 40, 40))
+	s.Fill(FillNonZero, IdentityAffine(),
+		SolidBrush(gg.RGBA{R: 1, G: 0, B: 0, A: 1}),
+		NewRectShape(0, 0, float32(size), float32(size)))
+	s.PopClip()
+
+	// After the clip, fill with blue. This should cover the entire canvas.
+	s.Fill(FillNonZero, IdentityAffine(),
+		SolidBrush(gg.RGBA{R: 0, G: 0, B: 1, A: 1}),
+		NewRectShape(0, 0, float32(size), float32(size)))
+
+	if err := r.Render(target, s); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	// After the unclipped blue fill, the entire canvas should be blue.
+	// The blue is drawn AFTER the clip ends, so it covers everything.
+	corner := target.GetPixel(10, 10)
+	if corner.B < 0.9 || corner.A < 0.9 {
+		t.Errorf("post-clip corner (10,10) = %+v, want opaque blue", corner)
+	}
+
+	center := target.GetPixel(100, 100)
+	if center.B < 0.9 || center.A < 0.9 {
+		t.Errorf("post-clip center (100,100) = %+v, want opaque blue", center)
+	}
+}
+
+// TestClipEmpty verifies that a clip to a shape outside the viewport
+// effectively clips away all content.
+func TestClipEmpty(t *testing.T) {
+	const size = 100
+	r := NewRenderer(size, size)
+	if r == nil {
+		t.Fatal("NewRenderer returned nil")
+	}
+	defer r.Close()
+
+	target := gg.NewPixmap(size, size)
+
+	s := NewScene()
+
+	// Clip to a rectangle entirely outside the viewport.
+	s.PushClip(NewRectShape(200, 200, 50, 50))
+
+	// Fill entire canvas — should be entirely clipped away.
+	s.Fill(FillNonZero, IdentityAffine(),
+		SolidBrush(gg.RGBA{R: 1, G: 0, B: 0, A: 1}),
+		NewRectShape(0, 0, float32(size), float32(size)))
+
+	s.PopClip()
+
+	if err := r.Render(target, s); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	// Everything should be transparent — no red pixels.
+	center := target.GetPixel(50, 50)
+	if center.A > 0.1 {
+		t.Errorf("off-screen clip: center alpha = %.2f, want transparent", center.A)
+	}
+}
+
+// TestClipWithCircle verifies clipping works with non-rectangular shapes.
+func TestClipWithCircle(t *testing.T) {
+	const size = 200
+	r := NewRenderer(size, size)
+	if r == nil {
+		t.Fatal("NewRenderer returned nil")
+	}
+	defer r.Close()
+
+	target := gg.NewPixmap(size, size)
+
+	s := NewScene()
+
+	// Clip to a circle centered at (100, 100) with radius 40.
+	s.PushClip(NewCircleShape(100, 100, 40))
+
+	// Fill entire canvas red — should only appear inside the circle.
+	s.Fill(FillNonZero, IdentityAffine(),
+		SolidBrush(gg.RGBA{R: 1, G: 0, B: 0, A: 1}),
+		NewRectShape(0, 0, float32(size), float32(size)))
+
+	s.PopClip()
+
+	if err := r.Render(target, s); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	// Center of the circle should be red.
+	center := target.GetPixel(100, 100)
+	if center.R < 0.9 || center.A < 0.9 {
+		t.Errorf("circle clip center (100,100) = %+v, want opaque red", center)
+	}
+
+	// Corner well outside the circle should be transparent.
+	corner := target.GetPixel(10, 10)
+	if corner.A > 0.1 {
+		t.Errorf("circle clip exterior (10,10) alpha = %.2f, want transparent", corner.A)
+	}
+}
+
+// TestClipWithTransform verifies that clip shapes are affected by the
+// current transform at the time PushClip is called.
+func TestClipWithTransform(t *testing.T) {
+	const size = 200
+	r := NewRenderer(size, size)
+	if r == nil {
+		t.Fatal("NewRenderer returned nil")
+	}
+	defer r.Close()
+
+	target := gg.NewPixmap(size, size)
+
+	s := NewScene()
+
+	// Set a transform that translates by (50, 50).
+	s.PushTransform(TranslateAffine(50, 50))
+
+	// Clip to a rectangle at (0,0)-(60,60) in local coords.
+	// With the translate, this maps to (50,50)-(110,110) in canvas space.
+	s.PushClip(NewRectShape(0, 0, 60, 60))
+
+	// Fill a large rect — only the translated clip region should show.
+	s.Fill(FillNonZero, IdentityAffine(),
+		SolidBrush(gg.RGBA{R: 0, G: 1, B: 0, A: 1}),
+		NewRectShape(-100, -100, 400, 400))
+
+	s.PopClip()
+	s.PopTransform()
+
+	if err := r.Render(target, s); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	// Inside the translated clip region (80, 80) should be green.
+	inside := target.GetPixel(80, 80)
+	if inside.G < 0.9 || inside.A < 0.9 {
+		t.Errorf("translated clip interior (80,80) = %+v, want opaque green", inside)
+	}
+
+	// Outside the translated clip (10, 10) should be transparent.
+	outside := target.GetPixel(10, 10)
+	if outside.A > 0.1 {
+		t.Errorf("translated clip exterior (10,10) alpha = %.2f, want transparent", outside.A)
+	}
+}
+
+// TestClipBuilderAPI verifies the SceneBuilder.Clip() convenience method
+// works end-to-end with the renderer.
+func TestClipBuilderAPI(t *testing.T) {
+	const size = 200
+	r := NewRenderer(size, size)
+	if r == nil {
+		t.Fatal("NewRenderer returned nil")
+	}
+	defer r.Close()
+
+	target := gg.NewPixmap(size, size)
+
+	builder := NewSceneBuilder()
+	builder.
+		FillRect(0, 0, float32(size), float32(size), SolidBrush(gg.RGBA{R: 0, G: 0, B: 1, A: 1})).
+		Clip(NewRectShape(60, 60, 80, 80), func(b *SceneBuilder) {
+			b.FillRect(0, 0, float32(size), float32(size), SolidBrush(gg.RGBA{R: 1, G: 0, B: 0, A: 1}))
+		})
+	scene := builder.Build()
+
+	if err := r.Render(target, scene); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	// Center should be red (inside clip on top of blue).
+	center := target.GetPixel(100, 100)
+	if center.R < 0.9 || center.A < 0.9 {
+		t.Errorf("builder clip center (100,100) = %+v, want opaque red", center)
+	}
+
+	// Corner should be blue (outside clip, original blue fill visible).
+	corner := target.GetPixel(10, 10)
+	if corner.B < 0.9 || corner.A < 0.9 {
+		t.Errorf("builder clip corner (10,10) = %+v, want opaque blue", corner)
+	}
+}
+
+// TestExtractAlphaMask verifies the alpha mask extraction helper.
+func TestExtractAlphaMask(t *testing.T) {
+	pm := gg.NewPixmap(2, 2)
+	data := pm.Data()
+
+	// Set pixel (0,0) = fully opaque red
+	data[0], data[1], data[2], data[3] = 255, 0, 0, 255
+	// Set pixel (1,0) = half-transparent green
+	data[4], data[5], data[6], data[7] = 0, 128, 0, 128
+	// Set pixel (0,1) = fully transparent
+	data[8], data[9], data[10], data[11] = 0, 0, 0, 0
+	// Set pixel (1,1) = opaque blue
+	data[12], data[13], data[14], data[15] = 0, 0, 255, 255
+
+	mask := extractAlphaMask(pm)
+
+	if len(mask) != 4 {
+		t.Fatalf("mask length = %d, want 4", len(mask))
+	}
+	if mask[0] != 255 {
+		t.Errorf("mask[0] = %d, want 255", mask[0])
+	}
+	if mask[1] != 128 {
+		t.Errorf("mask[1] = %d, want 128", mask[1])
+	}
+	if mask[2] != 0 {
+		t.Errorf("mask[2] = %d, want 0", mask[2])
+	}
+	if mask[3] != 255 {
+		t.Errorf("mask[3] = %d, want 255", mask[3])
+	}
+}
+
+// TestApplyAlphaMask verifies the alpha mask application helper.
+func TestApplyAlphaMask(t *testing.T) {
+	pm := gg.NewPixmap(2, 1)
+	data := pm.Data()
+
+	// Pixel 0: opaque white (premultiplied)
+	data[0], data[1], data[2], data[3] = 255, 255, 255, 255
+	// Pixel 1: opaque red (premultiplied)
+	data[4], data[5], data[6], data[7] = 255, 0, 0, 255
+
+	mask := []byte{128, 0} // Half coverage, then zero
+
+	applyAlphaMask(pm, mask)
+
+	// Pixel 0 should be half: 255 * 128/255 ~ 128
+	if data[0] < 126 || data[0] > 130 {
+		t.Errorf("pixel 0 R = %d, want ~128", data[0])
+	}
+	if data[3] < 126 || data[3] > 130 {
+		t.Errorf("pixel 0 A = %d, want ~128", data[3])
+	}
+
+	// Pixel 1 should be fully zeroed
+	if data[4] != 0 || data[5] != 0 || data[6] != 0 || data[7] != 0 {
+		t.Errorf("pixel 1 = [%d,%d,%d,%d], want [0,0,0,0]", data[4], data[5], data[6], data[7])
+	}
+}
+
+// TestCompositePixmaps verifies the source-over compositing helper.
+func TestCompositePixmaps(t *testing.T) {
+	dst := gg.NewPixmap(1, 1)
+	src := gg.NewPixmap(1, 1)
+
+	dstData := dst.Data()
+	srcData := src.Data()
+
+	// dst: opaque red (premultiplied)
+	dstData[0], dstData[1], dstData[2], dstData[3] = 255, 0, 0, 255
+	// src: half-transparent blue (premultiplied: B=128, A=128)
+	srcData[0], srcData[1], srcData[2], srcData[3] = 0, 0, 128, 128
+
+	compositePixmaps(dst, src)
+
+	// source-over: dst' = src + dst * (1 - srcAlpha/255)
+	// invAlpha = 255 - 128 = 127
+	// R = 0 + 255 * 127/255 ~ 127
+	// B = 128 + 0 * 127/255 = 128
+	// A = 128 + 255 * 127/255 ~ 255
+	if dstData[0] < 125 || dstData[0] > 129 {
+		t.Errorf("composite R = %d, want ~127", dstData[0])
+	}
+	if dstData[2] != 128 {
+		t.Errorf("composite B = %d, want 128", dstData[2])
+	}
+	if dstData[3] < 253 {
+		t.Errorf("composite A = %d, want ~255", dstData[3])
+	}
+}
