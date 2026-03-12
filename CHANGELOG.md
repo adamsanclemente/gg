@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.1] - 2026-03-13
+
+### Fixed
+
+- **GPU pipeline ignoring ClipRect** — `ClipRect` had no effect on GPU-rendered
+  content (shapes, text). The GPU render pipeline now uses hardware scissor rect
+  (`hal.RenderPassEncoder.SetScissorRect()`) for zero-cost clipping across all 6
+  render tiers. Pending draw batches are flushed on scissor change to ensure
+  correct per-batch clipping (Skia pattern).
+  - `ClipAware` accelerator interface for scissor rect propagation
+  - Batch-breaking on scissor change in `SDFAccelerator`
+  - Scissor applied in both offscreen and surface render paths
+  - Covers ~95% of real-world UI clipping (scroll views, panels, list items)
+
 ## [0.36.0] - 2026-03-12
 
 ### Added

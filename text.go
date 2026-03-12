@@ -56,6 +56,9 @@ func (c *Context) DrawString(s string, x, y float64) {
 		return
 	}
 
+	// Set GPU scissor rect for rectangular clips.
+	defer c.setGPUClipRect()()
+
 	switch c.selectTextStrategy() {
 	case TextModeGlyphMask:
 		// Try GPU glyph mask (Tier 6) first; fall back to MSDF, then CPU.

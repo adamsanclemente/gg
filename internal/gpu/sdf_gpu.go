@@ -96,6 +96,7 @@ var _ gg.GPUGlyphMaskAccelerator = (*SDFAccelerator)(nil)
 var _ gg.PipelineModeAware = (*SDFAccelerator)(nil)
 var _ gg.ComputePipelineAware = (*SDFAccelerator)(nil)
 var _ gg.ForceSDFAware = (*SDFAccelerator)(nil)
+var _ gg.ClipAware = (*SDFAccelerator)(nil)
 
 // Name returns the accelerator identifier.
 func (a *SDFAccelerator) Name() string { return "sdf-gpu" }
@@ -104,6 +105,55 @@ func (a *SDFAccelerator) Name() string { return "sdf-gpu" }
 // When enabled, the CPU fallback skips the minimum size check for SDF shapes.
 func (a *SDFAccelerator) SetForceSDF(force bool) {
 	a.cpuFallback.SetForceSDF(force)
+}
+
+// SetClipRect sets the scissor rect for subsequent GPU draw commands.
+// The scissor rect is forwarded to the GPURenderSession, which applies
+// it to the render pass encoder via hal.RenderPassEncoder.SetScissorRect().
+//
+// If there are pending draw commands with a different (or no) scissor rect,
+// they are flushed first so each batch has consistent scissor state.
+// This matches Skia's approach: scissor change breaks the batch.
+func (a *SDFAccelerator) SetClipRect(x, y, w, h uint32) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Flush pending commands that were queued with the previous scissor state.
+	a.flushOnScissorChange()
+	if a.session != nil {
+		a.session.SetScissorRect(x, y, w, h)
+	}
+}
+
+// ClearClipRect removes the scissor rect, restoring full-framebuffer
+// rendering for subsequent draw commands.
+//
+// Pending draw commands queued with the previous scissor rect are flushed
+// first so they render correctly clipped.
+func (a *SDFAccelerator) ClearClipRect() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Flush pending commands that were queued with the active scissor rect.
+	a.flushOnScissorChange()
+	if a.session != nil {
+		a.session.ClearScissorRect()
+	}
+}
+
+// flushOnScissorChange flushes pending draw commands if any exist.
+// Called before changing the scissor rect to ensure each batch renders
+// with the correct scissor state. Must be called with a.mu held.
+func (a *SDFAccelerator) flushOnScissorChange() {
+	if a.pendingTarget == nil {
+		return // No pending commands — nothing to flush.
+	}
+	pending := len(a.pendingShapes) + len(a.pendingConvexCommands) +
+		len(a.pendingStencilPaths) + len(a.pendingTextBatches) +
+		len(a.pendingGlyphMaskBatches)
+	if pending == 0 {
+		return
+	}
+	// Flush with current scissor state before changing it.
+	_ = a.flushLocked(*a.pendingTarget)
 }
 
 // CanAccelerate reports whether this accelerator supports the given operation.

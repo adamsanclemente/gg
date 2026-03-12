@@ -324,6 +324,25 @@ type ForceSDFAware interface {
 	SetForceSDF(force bool)
 }
 
+// ClipAware is an optional interface for accelerators that support
+// hardware scissor rect clipping. When the Context has an active
+// rectangular clip region (ClipRect), it passes the clip bounds to the
+// accelerator as a scissor rect. The accelerator maps this to
+// hal.RenderPassEncoder.SetScissorRect() for zero-cost GPU clipping.
+//
+// This covers ~95% of real-world UI clipping (scroll views, panels,
+// list items). Path-based clips require GPU-CLIP-002 (stencil buffer).
+type ClipAware interface {
+	// SetClipRect sets the scissor rect for subsequent GPU draw commands.
+	// Coordinates are in device pixels (uint32). The scissor rect clips
+	// all rendering to the rectangle (x, y, w, h).
+	SetClipRect(x, y, w, h uint32)
+
+	// ClearClipRect removes the scissor rect, restoring full-framebuffer
+	// rendering for subsequent draw commands.
+	ClearClipRect()
+}
+
 // SceneStatsTracker is an optional interface for accelerators that track
 // per-frame scene statistics for auto pipeline selection. The Context
 // does not call these methods directly — the accelerator uses them internally.
