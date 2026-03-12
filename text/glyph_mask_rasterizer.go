@@ -224,6 +224,6 @@ type glyphPath struct {
 	points []float32
 }
 
-func (p *glyphPath) IsEmpty() bool      { return len(p.verbs) == 0 }
+func (p *glyphPath) IsEmpty() bool            { return len(p.verbs) == 0 }
 func (p *glyphPath) Verbs() []raster.PathVerb { return p.verbs }
-func (p *glyphPath) Points() []float32  { return p.points }
+func (p *glyphPath) Points() []float32        { return p.points }
