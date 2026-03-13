@@ -143,6 +143,11 @@ type GPURenderSession struct {
 	// Only relevant in surface mode — offscreen mode composites via
 	// Porter-Duff "over" during readback, so LoadOpClear is always safe.
 	frameRendered bool
+
+	// scissorRect holds the current scissor rect in device pixels.
+	// When non-nil, all draw commands are clipped to this rectangle.
+	// nil means full framebuffer (default, no clipping).
+	scissorRect *[4]uint32
 }
 
 // NewGPURenderSession creates a new render session with the given device and
@@ -215,6 +220,27 @@ func (s *GPURenderSession) SetSurfaceTarget(view hal.TextureView, width, height 
 // Porter-Duff "over", so LoadOpClear is always safe there.
 func (s *GPURenderSession) BeginFrame() {
 	s.frameRendered = false
+}
+
+// SetScissorRect sets the scissor rect for subsequent GPU draw commands.
+// Coordinates are in device pixels. The scissor rect clips all rendering
+// to the rectangle (x, y, w, h).
+func (s *GPURenderSession) SetScissorRect(x, y, w, h uint32) {
+	s.scissorRect = &[4]uint32{x, y, w, h}
+}
+
+// ClearScissorRect removes the scissor rect, restoring full-framebuffer
+// rendering for subsequent draw commands.
+func (s *GPURenderSession) ClearScissorRect() {
+	s.scissorRect = nil
+}
+
+// applyScissorRect applies the current scissor rect (if any) to the given
+// render pass encoder. Call this after BeginRenderPass and before draw calls.
+func (s *GPURenderSession) applyScissorRect(rp hal.RenderPassEncoder) {
+	if s.scissorRect != nil {
+		rp.SetScissorRect(s.scissorRect[0], s.scissorRect[1], s.scissorRect[2], s.scissorRect[3])
+	}
 }
 
 // RenderMode returns the current render mode based on whether a surface
@@ -1222,6 +1248,7 @@ func (s *GPURenderSession) encodeSubmitReadback(
 	}
 
 	rp := encoder.BeginRenderPass(rpDesc)
+	s.applyScissorRect(rp)
 
 	// Tier 1: SDF shapes (no stencil interaction).
 	if sdfRes != nil && len(sdfShapes) > 0 {
@@ -1416,6 +1443,7 @@ func (s *GPURenderSession) encodeSubmitSurface(
 	}
 
 	rp := encoder.BeginRenderPass(rpDesc)
+	s.applyScissorRect(rp)
 
 	// Tier 1: SDF shapes (no stencil interaction).
 	if sdfRes != nil && len(sdfShapes) > 0 {

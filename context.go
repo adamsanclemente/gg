@@ -1078,25 +1078,13 @@ func sdfAccelForShape(kind ShapeKind) AcceleratedOp {
 // doFill performs the fill operation respecting the current RasterizerMode.
 func (c *Context) doFill() error {
 	mode := c.rasterizerMode
-	cpuMode := mode
 
-	// RasterizerSDF: try SDF without minimum size check.
-	if mode == RasterizerSDF {
-		c.setForceSDF(true)
-		err := c.tryGPUFill()
-		c.setForceSDF(false)
-		if err == nil {
-			return nil
-		}
-		// Non-SDF shape → auto CPU fallback.
-		cpuMode = RasterizerAuto
-	}
+	// Set GPU scissor rect for rectangular clips.
+	defer c.setGPUClipRect()()
 
-	// RasterizerAuto: try GPU normally (SDF with size check).
-	if mode == RasterizerAuto {
-		if err := c.tryGPUFill(); err == nil {
-			return nil
-		}
+	ok, cpuMode := c.tryGPUFillWithMode(mode)
+	if ok {
+		return nil
 	}
 
 	// CPU path: flush pending GPU, apply mode to software renderer.
@@ -1117,24 +1105,13 @@ func (c *Context) doFill() error {
 func (c *Context) doStroke() error {
 	c.paint.TransformScale = c.matrix.ScaleFactor()
 	mode := c.rasterizerMode
-	cpuMode := mode
 
-	// RasterizerSDF: try SDF without minimum size check.
-	if mode == RasterizerSDF {
-		c.setForceSDF(true)
-		err := c.tryGPUStroke()
-		c.setForceSDF(false)
-		if err == nil {
-			return nil
-		}
-		cpuMode = RasterizerAuto
-	}
+	// Set GPU scissor rect for rectangular clips.
+	defer c.setGPUClipRect()()
 
-	// RasterizerAuto: try GPU normally.
-	if mode == RasterizerAuto {
-		if err := c.tryGPUStroke(); err == nil {
-			return nil
-		}
+	ok, cpuMode := c.tryGPUStrokeWithMode(mode)
+	if ok {
+		return nil
 	}
 
 	c.flushGPUAccelerator()
@@ -1161,6 +1138,83 @@ func (c *Context) applyClipToPaint() {
 	c.paint.ClipCoverage = func(x, y float64) byte {
 		return cs.Coverage(x, y)
 	}
+}
+
+// isClipActive reports whether a clip region is currently active.
+func (c *Context) isClipActive() bool {
+	return c.clipStack != nil && c.clipStack.Depth() > 0
+}
+
+// setGPUClipRect sets the GPU scissor rect if a rectangular clip is active.
+// Returns a cleanup function that must be deferred to clear the scissor rect.
+// If no clip is active or the accelerator doesn't support ClipAware, the
+// returned function is a no-op.
+func (c *Context) setGPUClipRect() func() {
+	if !c.isClipActive() || !c.clipStack.IsRectOnly() {
+		return func() {}
+	}
+	a := Accelerator()
+	if a == nil {
+		return func() {}
+	}
+	ca, ok := a.(ClipAware)
+	if !ok {
+		return func() {}
+	}
+	bounds := c.clipStack.Bounds()
+	// Convert float64 clip bounds to uint32 device pixel scissor rect.
+	// floor(x,y) for top-left, ceil(right,bottom) for full pixel coverage.
+	x0 := uint32(math.Floor(bounds.X))
+	y0 := uint32(math.Floor(bounds.Y))
+	x1 := uint32(math.Ceil(bounds.X + bounds.W))
+	y1 := uint32(math.Ceil(bounds.Y + bounds.H))
+	if x1 <= x0 || y1 <= y0 {
+		return func() {} // Zero-area clip — nothing to render
+	}
+	ca.SetClipRect(x0, y0, x1-x0, y1-y0)
+	return func() { ca.ClearClipRect() }
+}
+
+// tryGPUFillWithMode attempts GPU fill based on the rasterizer mode.
+// Returns (true, _) if GPU handled the fill, or (false, cpuMode) with the
+// fallback CPU mode to use.
+func (c *Context) tryGPUFillWithMode(mode RasterizerMode) (bool, RasterizerMode) {
+	if mode == RasterizerSDF {
+		c.setForceSDF(true)
+		err := c.tryGPUFill()
+		c.setForceSDF(false)
+		if err == nil {
+			return true, mode
+		}
+		mode = RasterizerAuto // Non-SDF shape → auto CPU fallback.
+	}
+	if mode == RasterizerAuto {
+		if err := c.tryGPUFill(); err == nil {
+			return true, mode
+		}
+	}
+	return false, mode
+}
+
+// tryGPUStrokeWithMode attempts GPU stroke based on the rasterizer mode.
+// Returns (true, _) if GPU handled the stroke, or (false, cpuMode) with the
+// fallback CPU mode to use.
+func (c *Context) tryGPUStrokeWithMode(mode RasterizerMode) (bool, RasterizerMode) {
+	if mode == RasterizerSDF {
+		c.setForceSDF(true)
+		err := c.tryGPUStroke()
+		c.setForceSDF(false)
+		if err == nil {
+			return true, mode
+		}
+		mode = RasterizerAuto
+	}
+	if mode == RasterizerAuto {
+		if err := c.tryGPUStroke(); err == nil {
+			return true, mode
+		}
+	}
+	return false, mode
 }
 
 // setForceSDF enables/disables forced SDF on the registered accelerator.

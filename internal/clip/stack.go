@@ -147,6 +147,19 @@ func (cs *ClipStack) Coverage(x, y float64) byte {
 	return byte(coverage)
 }
 
+// IsRectOnly reports whether the clip stack contains only rectangular clips
+// (no path-based masks). When true, clipping can be applied by restricting
+// the destination bounds rather than per-pixel coverage, which preserves
+// bitmap text quality and is significantly faster.
+func (cs *ClipStack) IsRectOnly() bool {
+	for i := range cs.entries {
+		if cs.entries[i].mask != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // Depth returns the current depth of the clip stack.
 // This is primarily useful for debugging and testing.
 func (cs *ClipStack) Depth() int {
