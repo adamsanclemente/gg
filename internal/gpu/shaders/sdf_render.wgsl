@@ -56,34 +56,37 @@ struct ClipParams {
 // rrect_clip_coverage computes anti-aliased coverage for the RRect clip
 // region at the given fragment position. Returns 1.0 when clip is disabled.
 // All math is naga-safe (no abs/min/max/clamp/smoothstep builtins).
+// Uses single-return pattern to avoid naga SPIR-V early-return codegen
+// issues on Intel Vulkan.
 fn rrect_clip_coverage(frag_pos: vec2<f32>) -> f32 {
-    if clip.clip_enabled < 0.5 { return 1.0; }
+    // Branchless: Intel Vulkan shader compiler generates bad code for complex
+    // sqrt-heavy math inside conditional blocks. Compute SDF unconditionally,
+    // then arithmetic-select the result based on clip_enabled.
+    // When enabled=0: 0*sdf + 1*1.0 = 1.0 (no clip).
+    // When enabled=1: 1*sdf + 0*1.0 = sdf (clip active).
+    // Workaround for GPU-CLIP-002 / naga SPIR-V codegen on Intel Vulkan.
     let cx = (clip.clip_rect.x + clip.clip_rect.z) * 0.5;
     let cy = (clip.clip_rect.y + clip.clip_rect.w) * 0.5;
     let hw = (clip.clip_rect.z - clip.clip_rect.x) * 0.5;
     let hh = (clip.clip_rect.w - clip.clip_rect.y) * 0.5;
     let r = clip.clip_radius;
-    // abs via sqrt(x*x)
     let dx = sqrt((frag_pos.x - cx) * (frag_pos.x - cx));
     let dy = sqrt((frag_pos.y - cy) * (frag_pos.y - cy));
     let qx = dx - hw + r;
     let qy = dy - hh + r;
-    // max(q, 0) via (q + sqrt(q*q)) * 0.5
     let mqx = (qx + sqrt(qx * qx)) * 0.5;
     let mqy = (qy + sqrt(qy * qy)) * 0.5;
     let outside = sqrt(mqx * mqx + mqy * mqy);
-    // max(qx, qy)
     let qdiff = qx - qy;
     let max_qxy = (qx + qy + sqrt(qdiff * qdiff)) * 0.5;
-    // min(max_qxy, 0)
     let inside = (max_qxy - sqrt(max_qxy * max_qxy)) * 0.5;
     let d = outside + inside - r;
-    // smoothstep AA in [-0.5, 0.5]
     let t_raw = d + 0.5;
     let t_pos = (t_raw + sqrt(t_raw * t_raw)) * 0.5;
     let t_diff = t_pos - 1.0;
     let t = (t_pos + 1.0 - sqrt(t_diff * t_diff)) * 0.5;
-    return 1.0 - t * t * (3.0 - 2.0 * t);
+    let sdf_cov = 1.0 - t * t * (3.0 - 2.0 * t);
+    return clip.clip_enabled * sdf_cov + (1.0 - clip.clip_enabled);
 }
 
 @vertex

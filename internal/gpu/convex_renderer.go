@@ -190,12 +190,15 @@ func (cr *ConvexRenderer) ensurePipelineWithStencil() error { //nolint:dupl // G
 //
 // The resources parameter holds pre-built vertex buffer, uniform buffer, and
 // bind group for the current frame. This is a no-op if resources is nil.
-func (cr *ConvexRenderer) RecordDraws(rp hal.RenderPassEncoder, resources *convexFrameResources) {
+func (cr *ConvexRenderer) RecordDraws(rp hal.RenderPassEncoder, resources *convexFrameResources, clipBG hal.BindGroup) {
 	if resources == nil || resources.vertCount == 0 {
 		return
 	}
 	rp.SetPipeline(cr.pipelineWithStencil)
 	rp.SetBindGroup(0, resources.bindGroup, nil)
+	if clipBG != nil {
+		rp.SetBindGroup(1, clipBG, nil)
+	}
 	rp.SetVertexBuffer(0, resources.vertBuf, 0)
 	rp.Draw(resources.vertCount, 1, resources.firstVertex, 0)
 }

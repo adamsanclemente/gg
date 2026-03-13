@@ -462,22 +462,25 @@ func (sr *StencilRenderer) submitAndReadback(
 // The bufs parameter holds pre-built vertex buffers, uniform buffers, and
 // bind groups for the current path. The fill rule selects between non-zero
 // and even-odd stencil pipelines.
-func (sr *StencilRenderer) RecordPath(rp hal.RenderPassEncoder, bufs *stencilCoverBuffers, fillRule gg.FillRule) {
+func (sr *StencilRenderer) RecordPath(rp hal.RenderPassEncoder, bufs *stencilCoverBuffers, fillRule gg.FillRule, clipBG hal.BindGroup) {
 	// Select stencil pipeline based on fill rule.
 	stencilPipeline := sr.nonZeroStencilPipeline
 	if fillRule == gg.FillRuleEvenOdd {
 		stencilPipeline = sr.evenOddStencilPipeline
 	}
 
-	// Pass 1: Stencil fill.
+	// Pass 1: Stencil fill (clip not needed — only writes stencil buffer).
 	rp.SetPipeline(stencilPipeline)
 	rp.SetBindGroup(0, bufs.stencilBindGroup, nil)
 	rp.SetVertexBuffer(0, bufs.fanVertBuf, 0)
 	rp.Draw(bufs.fanVertexCount, 1, 0, 0)
 
-	// Pass 2: Cover.
+	// Pass 2: Cover (clip applied here — writes color output).
 	rp.SetPipeline(sr.nonZeroCoverPipeline)
 	rp.SetBindGroup(0, bufs.coverBindGroup, nil)
+	if clipBG != nil {
+		rp.SetBindGroup(1, clipBG, nil)
+	}
 	rp.SetVertexBuffer(0, bufs.coverVertBuf, 0)
 	rp.SetStencilReference(0)
 	rp.Draw(6, 1, 0, 0)

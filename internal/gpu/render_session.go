@@ -1627,33 +1627,33 @@ func (s *GPURenderSession) encodeSubmitReadback(
 	s.applyScissorRect(rp)
 
 	// Bind no-clip at @group(1) for non-grouped path (no RRect clip).
-	if s.noClipBindGroup != nil {
-		rp.SetBindGroup(1, s.noClipBindGroup, nil)
-	}
+	// Clip bind group is passed to each RecordDraws (must be bound AFTER
+	// SetPipeline due to Vulkan pipeline layout requirement).
+	clipBG := s.noClipBindGroup
 
 	// Tier 1: SDF shapes (no stencil interaction).
 	if sdfRes != nil && len(sdfShapes) > 0 {
-		s.sdfPipeline.RecordDraws(rp, sdfRes)
+		s.sdfPipeline.RecordDraws(rp, sdfRes, clipBG)
 	}
 
 	// Tier 2a: Convex polygon fast-path (no stencil interaction).
 	if convexRes != nil {
-		s.convexRenderer.RecordDraws(rp, convexRes)
+		s.convexRenderer.RecordDraws(rp, convexRes, clipBG)
 	}
 
 	// Tier 2b: Stencil-then-cover paths.
 	for i, bufs := range stencilRes {
-		s.stencilRenderer.RecordPath(rp, bufs, stencilPaths[i].FillRule)
+		s.stencilRenderer.RecordPath(rp, bufs, stencilPaths[i].FillRule, clipBG)
 	}
 
 	// Tier 4: MSDF text (rendered after shapes).
 	if textRes != nil && len(textRes.drawCalls) > 0 {
-		s.textPipeline.RecordDraws(rp, textRes)
+		s.textPipeline.RecordDraws(rp, textRes, clipBG)
 	}
 
 	// Tier 6: Glyph mask text (rendered last, on top of all other geometry).
 	if glyphMaskRes != nil && len(glyphMaskRes.drawCalls) > 0 {
-		s.glyphMaskPipeline.RecordDraws(rp, glyphMaskRes)
+		s.glyphMaskPipeline.RecordDraws(rp, glyphMaskRes, clipBG)
 	}
 
 	rp.End()
@@ -1826,34 +1826,33 @@ func (s *GPURenderSession) encodeSubmitSurface(
 	rp := encoder.BeginRenderPass(rpDesc)
 	s.applyScissorRect(rp)
 
-	// Bind no-clip at @group(1) for non-grouped path (no RRect clip).
-	if s.noClipBindGroup != nil {
-		rp.SetBindGroup(1, s.noClipBindGroup, nil)
-	}
+	// Clip bind group is passed to each RecordDraws (must be bound AFTER
+	// SetPipeline due to Vulkan pipeline layout requirement).
+	clipBG := s.noClipBindGroup
 
 	// Tier 1: SDF shapes (no stencil interaction).
 	if sdfRes != nil && len(sdfShapes) > 0 {
-		s.sdfPipeline.RecordDraws(rp, sdfRes)
+		s.sdfPipeline.RecordDraws(rp, sdfRes, clipBG)
 	}
 
 	// Tier 2a: Convex polygon fast-path (no stencil interaction).
 	if convexRes != nil {
-		s.convexRenderer.RecordDraws(rp, convexRes)
+		s.convexRenderer.RecordDraws(rp, convexRes, clipBG)
 	}
 
 	// Tier 2b: Stencil-then-cover paths.
 	for i, bufs := range stencilRes {
-		s.stencilRenderer.RecordPath(rp, bufs, stencilPaths[i].FillRule)
+		s.stencilRenderer.RecordPath(rp, bufs, stencilPaths[i].FillRule, clipBG)
 	}
 
 	// Tier 4: MSDF text (rendered after shapes).
 	if textRes != nil && len(textRes.drawCalls) > 0 {
-		s.textPipeline.RecordDraws(rp, textRes)
+		s.textPipeline.RecordDraws(rp, textRes, clipBG)
 	}
 
 	// Tier 6: Glyph mask text (rendered last, on top of all other geometry).
 	if glyphMaskRes != nil && len(glyphMaskRes.drawCalls) > 0 {
-		s.glyphMaskPipeline.RecordDraws(rp, glyphMaskRes)
+		s.glyphMaskPipeline.RecordDraws(rp, glyphMaskRes, clipBG)
 	}
 
 	rp.End()
@@ -1889,34 +1888,34 @@ func (s *GPURenderSession) encodeSubmitSurface(
 // the given render pass encoder. This is the inner loop of the grouped
 // encode methods — called once per scissor group within a single render pass.
 func (s *GPURenderSession) recordGroupDraws(rp hal.RenderPassEncoder, gr *groupResources) {
-	// Bind the clip uniform at @group(1) for all tiers in this group.
-	if gr.clipBindGroup != nil {
-		rp.SetBindGroup(1, gr.clipBindGroup, nil)
-	}
+	// Clip bind group is passed to each RecordDraws so it is bound at @group(1)
+	// AFTER SetPipeline and BEFORE Draw. Vulkan requires a valid pipeline
+	// layout when calling vkCmdBindDescriptorSets.
+	clipBG := gr.clipBindGroup
 
 	// Tier 1: SDF shapes (no stencil interaction).
 	if gr.sdfRes != nil && len(gr.sdfShapes) > 0 {
-		s.sdfPipeline.RecordDraws(rp, gr.sdfRes)
+		s.sdfPipeline.RecordDraws(rp, gr.sdfRes, clipBG)
 	}
 
 	// Tier 2a: Convex polygon fast-path (no stencil interaction).
 	if gr.convexRes != nil {
-		s.convexRenderer.RecordDraws(rp, gr.convexRes)
+		s.convexRenderer.RecordDraws(rp, gr.convexRes, clipBG)
 	}
 
 	// Tier 2b: Stencil-then-cover paths.
 	for i, bufs := range gr.stencilRes {
-		s.stencilRenderer.RecordPath(rp, bufs, gr.stencilPaths[i].FillRule)
+		s.stencilRenderer.RecordPath(rp, bufs, gr.stencilPaths[i].FillRule, clipBG)
 	}
 
 	// Tier 4: MSDF text (rendered after shapes).
 	if gr.textRes != nil && len(gr.textRes.drawCalls) > 0 {
-		s.textPipeline.RecordDraws(rp, gr.textRes)
+		s.textPipeline.RecordDraws(rp, gr.textRes, clipBG)
 	}
 
 	// Tier 6: Glyph mask text (rendered last, on top of all other geometry).
 	if gr.glyphMaskRes != nil && len(gr.glyphMaskRes.drawCalls) > 0 {
-		s.glyphMaskPipeline.RecordDraws(rp, gr.glyphMaskRes)
+		s.glyphMaskPipeline.RecordDraws(rp, gr.glyphMaskRes, clipBG)
 	}
 }
 

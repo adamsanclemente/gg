@@ -23,7 +23,12 @@ struct ClipParams {
 @group(1) @binding(0) var<uniform> clip: ClipParams;
 
 fn rrect_clip_coverage(frag_pos: vec2<f32>) -> f32 {
-    if clip.clip_enabled < 0.5 { return 1.0; }
+    // Branchless: Intel Vulkan shader compiler generates bad code for complex
+    // sqrt-heavy math inside conditional blocks. Compute SDF unconditionally,
+    // then arithmetic-select the result based on clip_enabled.
+    // When enabled=0: 0*sdf + 1*1.0 = 1.0 (no clip).
+    // When enabled=1: 1*sdf + 0*1.0 = sdf (clip active).
+    // Workaround for GPU-CLIP-002 / naga SPIR-V codegen on Intel Vulkan.
     let cx = (clip.clip_rect.x + clip.clip_rect.z) * 0.5;
     let cy = (clip.clip_rect.y + clip.clip_rect.w) * 0.5;
     let hw = (clip.clip_rect.z - clip.clip_rect.x) * 0.5;
@@ -44,7 +49,8 @@ fn rrect_clip_coverage(frag_pos: vec2<f32>) -> f32 {
     let t_pos = (t_raw + sqrt(t_raw * t_raw)) * 0.5;
     let t_diff = t_pos - 1.0;
     let t = (t_pos + 1.0 - sqrt(t_diff * t_diff)) * 0.5;
-    return 1.0 - t * t * (3.0 - 2.0 * t);
+    let sdf_cov = 1.0 - t * t * (3.0 - 2.0 * t);
+    return clip.clip_enabled * sdf_cov + (1.0 - clip.clip_enabled);
 }
 
 struct CoverVertexOutput {

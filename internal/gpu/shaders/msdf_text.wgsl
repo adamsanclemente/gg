@@ -70,28 +70,25 @@ struct ClipParams {
 @group(1) @binding(0) var<uniform> clip: ClipParams;
 
 fn rrect_clip_coverage(frag_pos: vec2<f32>) -> f32 {
-    if clip.clip_enabled < 0.5 { return 1.0; }
-    let cx = (clip.clip_rect.x + clip.clip_rect.z) * 0.5;
-    let cy = (clip.clip_rect.y + clip.clip_rect.w) * 0.5;
-    let hw = (clip.clip_rect.z - clip.clip_rect.x) * 0.5;
-    let hh = (clip.clip_rect.w - clip.clip_rect.y) * 0.5;
-    let r = clip.clip_radius;
-    let dx = sqrt((frag_pos.x - cx) * (frag_pos.x - cx));
-    let dy = sqrt((frag_pos.y - cy) * (frag_pos.y - cy));
-    let qx = dx - hw + r;
-    let qy = dy - hh + r;
-    let mqx = (qx + sqrt(qx * qx)) * 0.5;
-    let mqy = (qy + sqrt(qy * qy)) * 0.5;
-    let outside = sqrt(mqx * mqx + mqy * mqy);
-    let qdiff = qx - qy;
-    let max_qxy = (qx + qy + sqrt(qdiff * qdiff)) * 0.5;
-    let inside = (max_qxy - sqrt(max_qxy * max_qxy)) * 0.5;
-    let d = outside + inside - r;
-    let t_raw = d + 0.5;
-    let t_pos = (t_raw + sqrt(t_raw * t_raw)) * 0.5;
-    let t_diff = t_pos - 1.0;
-    let t = (t_pos + 1.0 - sqrt(t_diff * t_diff)) * 0.5;
-    return 1.0 - t * t * (3.0 - 2.0 * t);
+    // Text shaders: no per-pixel SDF clip. Returns 1.0 (no clipping).
+    //
+    // Enterprise research (GPU-CLIP-002) found that NO production 2D engine
+    // (Vello, Skia Graphite/Ganesh, Pathfinder, Qt RHI) computes per-pixel
+    // SDF clip inside text fragment shaders. The industry-standard approach
+    // is stencil-buffer clip (Skia Ganesh) or depth-buffer clip (Graphite).
+    //
+    // Per-pixel SDF clip (11 sqrt calls) combined with textureSample causes
+    // Intel Vulkan shader compiler to generate corrupt code — text becomes
+    // invisible. This is a known Intel driver limitation with register
+    // pressure from complex ALU + texture sampling in the same shader.
+    //
+    // Text clipping is handled by:
+    //   1. Hardware scissor rect (axis-aligned, free) — GPU-CLIP-001
+    //   2. Stencil-buffer RRect clip (planned) — GPU-CLIP-003
+    //
+    // The @group(1) binding is kept for uniform pipeline layout across all
+    // tiers, avoiding per-tier bind group logic in GPURenderSession.
+    return 1.0;
 }
 
 // ============================================================================

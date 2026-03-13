@@ -317,11 +317,14 @@ func (p *MSDFTextPipeline) ensurePipelineWithStencil() error {
 //
 // The resources parameter holds pre-built vertex/index buffers, uniform buffer,
 // and bind group for the current frame.
-func (p *MSDFTextPipeline) RecordDraws(rp hal.RenderPassEncoder, resources *textFrameResources) {
+func (p *MSDFTextPipeline) RecordDraws(rp hal.RenderPassEncoder, resources *textFrameResources, clipBG hal.BindGroup) {
 	if resources == nil || len(resources.drawCalls) == 0 {
 		return
 	}
 	rp.SetPipeline(p.pipelineWithStencil)
+	if clipBG != nil {
+		rp.SetBindGroup(1, clipBG, nil)
+	}
 	rp.SetVertexBuffer(0, resources.vertBuf, 0)
 	rp.SetIndexBuffer(resources.idxBuf, gputypes.IndexFormatUint16, 0)
 	for _, dc := range resources.drawCalls {
