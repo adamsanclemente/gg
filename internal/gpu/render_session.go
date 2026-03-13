@@ -407,11 +407,6 @@ func (s *GPURenderSession) RenderFrameGrouped(target gg.GPURenderTarget, groups 
 		return nil
 	}
 
-	slogger().Debug("RenderFrameGrouped",
-		"groups", len(groups),
-		"totalItems", totalItems,
-		"surface", s.surfaceView != nil)
-
 	w, h := uint32(target.Width), uint32(target.Height) //nolint:gosec // dimensions always fit uint32
 	if s.surfaceView != nil && s.surfaceWidth > 0 && s.surfaceHeight > 0 {
 		w, h = s.surfaceWidth, s.surfaceHeight
