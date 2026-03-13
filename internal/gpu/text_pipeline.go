@@ -87,6 +87,10 @@ type MSDFTextPipeline struct {
 
 	// Default sampler for MSDF textures (linear filtering).
 	sampler hal.Sampler
+
+	// clipBindLayout is the shared @group(1) bind group layout for RRect clip.
+	// Set by the session before ensurePipelineWithStencil.
+	clipBindLayout hal.BindGroupLayout
 }
 
 // NewMSDFTextPipeline creates a new MSDF text pipeline with the given device
@@ -97,6 +101,13 @@ func NewMSDFTextPipeline(device hal.Device, queue hal.Queue) *MSDFTextPipeline {
 		device: device,
 		queue:  queue,
 	}
+}
+
+// SetClipBindLayout sets the bind group layout for the @group(1) RRect clip
+// uniform. Must be called before ensurePipelineWithStencil. The layout is
+// owned by the session and must not be destroyed by the pipeline.
+func (p *MSDFTextPipeline) SetClipBindLayout(layout hal.BindGroupLayout) {
+	p.clipBindLayout = layout
 }
 
 // Destroy releases all GPU resources held by the pipeline. Safe to call
@@ -157,9 +168,13 @@ func (p *MSDFTextPipeline) createPipeline() error {
 	}
 	p.uniformLayout = uniformLayout
 
+	textBGLayouts := []hal.BindGroupLayout{p.uniformLayout}
+	if p.clipBindLayout != nil {
+		textBGLayouts = append(textBGLayouts, p.clipBindLayout)
+	}
 	pipeLayout, err := p.device.CreatePipelineLayout(&hal.PipelineLayoutDescriptor{
 		Label:            "msdf_text_pipe_layout",
-		BindGroupLayouts: []hal.BindGroupLayout{p.uniformLayout},
+		BindGroupLayouts: textBGLayouts,
 	})
 	if err != nil {
 		return fmt.Errorf("create msdf_text pipeline layout: %w", err)
@@ -302,11 +317,14 @@ func (p *MSDFTextPipeline) ensurePipelineWithStencil() error {
 //
 // The resources parameter holds pre-built vertex/index buffers, uniform buffer,
 // and bind group for the current frame.
-func (p *MSDFTextPipeline) RecordDraws(rp hal.RenderPassEncoder, resources *textFrameResources) {
+func (p *MSDFTextPipeline) RecordDraws(rp hal.RenderPassEncoder, resources *textFrameResources, clipBG hal.BindGroup) {
 	if resources == nil || len(resources.drawCalls) == 0 {
 		return
 	}
 	rp.SetPipeline(p.pipelineWithStencil)
+	if clipBG != nil {
+		rp.SetBindGroup(1, clipBG, nil)
+	}
 	rp.SetVertexBuffer(0, resources.vertBuf, 0)
 	rp.SetIndexBuffer(resources.idxBuf, gputypes.IndexFormatUint16, 0)
 	for _, dc := range resources.drawCalls {

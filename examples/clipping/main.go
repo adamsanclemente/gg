@@ -14,7 +14,7 @@ func main() {
 	// Create a 800x800 canvas
 	const (
 		width  = 800
-		height = 800
+		height = 900
 	)
 	dc := gg.NewContext(width, height)
 
@@ -37,8 +37,11 @@ func main() {
 	// Example 5: Complex path clipping
 	example5ComplexClip(dc)
 
-	// Example 6: ResetClip demonstration
-	example6ResetClip(dc)
+	// Example 6: ClipRoundRect demonstration
+	example6RoundRectClip(dc)
+
+	// Example 7: ResetClip demonstration
+	example7ResetClip(dc)
 
 	// Save the result
 	err := dc.SavePNG("output.png")
@@ -216,16 +219,49 @@ func example5ComplexClip(dc *gg.Context) {
 	dc.DrawString("5. Complex Path", 640, 260)
 }
 
-// example6 demonstrates ResetClip
-func example6ResetClip(dc *gg.Context) {
+// example6RoundRectClip demonstrates ClipRoundRect for rounded rectangle clipping.
+func example6RoundRectClip(dc *gg.Context) {
+	dc.Push()
+
+	// Use ClipRoundRect for rounded rectangle clipping
+	dc.ClipRoundRect(50, 600, 200, 140, 25)
+
+	// Draw colorful circles inside the rounded clip
+	colors := [][3]float64{
+		{0.9, 0.2, 0.3},
+		{0.2, 0.7, 0.9},
+		{0.9, 0.8, 0.2},
+		{0.3, 0.9, 0.4},
+		{0.7, 0.3, 0.9},
+	}
+	for i, c := range colors {
+		dc.SetRGB(c[0], c[1], c[2])
+		dc.DrawCircle(80+float64(i)*35, 650+float64(i)*12, 45)
+		dc.Fill()
+	}
+
+	dc.Pop()
+
+	// Draw border showing the rounded clip shape
+	dc.SetRGB(0, 0, 0)
+	dc.SetLineWidth(2)
+	dc.DrawRoundedRectangle(50, 600, 200, 140, 25)
+	dc.Stroke()
+
+	// Label
+	dc.DrawString("6. ClipRoundRect", 90, 770)
+}
+
+// example7 demonstrates ResetClip
+func example7ResetClip(dc *gg.Context) {
 	dc.Push()
 
 	// Set a clip
-	dc.ClipRect(550, 350, 160, 160)
+	dc.ClipRect(300, 600, 160, 160)
 
 	// Draw something
 	dc.SetRGB(0.9, 0.7, 0.3)
-	dc.DrawRectangle(500, 300, 250, 250)
+	dc.DrawRectangle(250, 550, 250, 250)
 	dc.Fill()
 
 	// Reset clip to draw outside
@@ -234,13 +270,13 @@ func example6ResetClip(dc *gg.Context) {
 	// Now we can draw anywhere
 	dc.SetRGB(0, 0, 0)
 	dc.SetLineWidth(2)
-	dc.DrawRectangle(550, 350, 160, 160)
+	dc.DrawRectangle(300, 600, 160, 160)
 	dc.Stroke()
 
 	dc.Pop()
 
 	// Label
-	dc.DrawString("6. ResetClip", 590, 560)
+	dc.DrawString("7. ResetClip", 330, 800)
 }
 
 // drawStar draws a star shape centered at (cx, cy) with given radius and points.

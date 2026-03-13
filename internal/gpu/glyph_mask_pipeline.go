@@ -71,6 +71,10 @@ type GlyphMaskPipeline struct {
 	// Default sampler for R8 atlas textures (linear filtering for smooth
 	// alpha interpolation at subpixel positions).
 	sampler hal.Sampler
+
+	// clipBindLayout is the shared @group(1) bind group layout for RRect clip.
+	// Set by the session before ensurePipelineWithStencil.
+	clipBindLayout hal.BindGroupLayout
 }
 
 // NewGlyphMaskPipeline creates a new glyph mask pipeline with the given device
@@ -81,6 +85,13 @@ func NewGlyphMaskPipeline(device hal.Device, queue hal.Queue) *GlyphMaskPipeline
 		device: device,
 		queue:  queue,
 	}
+}
+
+// SetClipBindLayout sets the bind group layout for the @group(1) RRect clip
+// uniform. Must be called before ensurePipelineWithStencil. The layout is
+// owned by the session and must not be destroyed by the pipeline.
+func (p *GlyphMaskPipeline) SetClipBindLayout(layout hal.BindGroupLayout) {
+	p.clipBindLayout = layout
 }
 
 // Destroy releases all GPU resources held by the pipeline. Safe to call
@@ -148,9 +159,13 @@ func (p *GlyphMaskPipeline) ensureSharedResources() error {
 	}
 	p.uniformLayout = uniformLayout
 
+	glyphBGLayouts := []hal.BindGroupLayout{p.uniformLayout}
+	if p.clipBindLayout != nil {
+		glyphBGLayouts = append(glyphBGLayouts, p.clipBindLayout)
+	}
 	pipeLayout, err := p.device.CreatePipelineLayout(&hal.PipelineLayoutDescriptor{
 		Label:            "glyph_mask_pipe_layout",
-		BindGroupLayouts: []hal.BindGroupLayout{p.uniformLayout},
+		BindGroupLayouts: glyphBGLayouts,
 	})
 	if err != nil {
 		return fmt.Errorf("create glyph_mask pipeline layout: %w", err)
@@ -254,11 +269,14 @@ func (p *GlyphMaskPipeline) ensurePipelineWithStencil() error {
 //
 // The resources parameter holds pre-built vertex/index buffers, uniform buffer,
 // and bind group for the current frame.
-func (p *GlyphMaskPipeline) RecordDraws(rp hal.RenderPassEncoder, resources *glyphMaskFrameResources) {
+func (p *GlyphMaskPipeline) RecordDraws(rp hal.RenderPassEncoder, resources *glyphMaskFrameResources, clipBG hal.BindGroup) {
 	if resources == nil || len(resources.drawCalls) == 0 {
 		return
 	}
 	rp.SetPipeline(p.pipelineWithStencil)
+	if clipBG != nil {
+		rp.SetBindGroup(1, clipBG, nil)
+	}
 	rp.SetVertexBuffer(0, resources.vertBuf, 0)
 	rp.SetIndexBuffer(resources.idxBuf, gputypes.IndexFormatUint16, 0)
 	for _, dc := range resources.drawCalls {

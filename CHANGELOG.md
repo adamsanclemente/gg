@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.4] - 2026-03-13
+
+### Added
+
+- **GPU RRect clip via analytic SDF in fragment shaders (GPU-CLIP-002)** — rounded
+  rectangle clipping now works on GPU. A two-level clip strategy combines the
+  free hardware scissor rect (bounding box) with a per-pixel SDF evaluation in
+  fragment shaders for anti-aliased rounded corners. Covers ~95% of non-rectangular
+  UI clipping (card views, dialogs, scroll containers with rounded corners).
+  - `ClipRoundRect(x, y, w, h, radius)` on Context — sets a rounded rectangle
+    clip region with automatic coordinate/radius transform
+  - `RRectClipAware` accelerator interface (`SetClipRRect`/`ClearClipRRect`)
+  - `ClipParams` uniform struct (32 bytes) shared across all 5 GPU pipelines
+    at `@group(1) @binding(0)` — pooled per-frame with reuse
+  - Branchless SDF clip in shape shaders (sdf_render, convex, cover): 11 sqrt
+    calls, naga-safe (no abs/min/max/clamp/smoothstep builtins), arithmetic
+    select via `clip_enabled * sdf + (1 - clip_enabled)` for Intel Vulkan
+  - Text shaders (msdf_text, glyph_mask) return 1.0 for clip coverage —
+    Intel Vulkan generates corrupt code when SDF + textureSample combined
+    (text clipping via hardware scissor rect only, stencil planned GPU-CLIP-003)
+  - `ClipStack.PushRRect()`, `IsRRectOnly()`, `RRectBounds()` — rounded
+    rectangle entries in the clip stack with SDF coverage for CPU path
+  - `ScissorGroup.ClipRRect` — per-group clip propagation in grouped render
+  - `ClipRoundRect` command in recording system for vector export backends
+  - Clipping example (`examples/clipping/`) updated with rounded rectangle demo
+
 ## [0.36.3] - 2026-03-13
 
 ### Fixed

@@ -75,6 +75,16 @@ type ConvexRenderer struct {
 	// includes a stencil attachment (for stencil-then-cover paths).
 	// The stencil test is Always/Keep (convex draws don't interact with stencil).
 	pipelineWithStencil hal.RenderPipeline
+
+	// Clip bind group layout for @group(1). Set by the session before
+	// pipeline creation. When non-nil, included in the pipeline layout.
+	clipBindLayout hal.BindGroupLayout
+}
+
+// SetClipBindLayout sets the bind group layout for the @group(1) RRect clip
+// uniform. Must be called before ensurePipelineWithStencil.
+func (cr *ConvexRenderer) SetClipBindLayout(layout hal.BindGroupLayout) {
+	cr.clipBindLayout = layout
 }
 
 // NewConvexRenderer creates a new convex polygon renderer with the given
@@ -180,12 +190,15 @@ func (cr *ConvexRenderer) ensurePipelineWithStencil() error { //nolint:dupl // G
 //
 // The resources parameter holds pre-built vertex buffer, uniform buffer, and
 // bind group for the current frame. This is a no-op if resources is nil.
-func (cr *ConvexRenderer) RecordDraws(rp hal.RenderPassEncoder, resources *convexFrameResources) {
+func (cr *ConvexRenderer) RecordDraws(rp hal.RenderPassEncoder, resources *convexFrameResources, clipBG hal.BindGroup) {
 	if resources == nil || resources.vertCount == 0 {
 		return
 	}
 	rp.SetPipeline(cr.pipelineWithStencil)
 	rp.SetBindGroup(0, resources.bindGroup, nil)
+	if clipBG != nil {
+		rp.SetBindGroup(1, clipBG, nil)
+	}
 	rp.SetVertexBuffer(0, resources.vertBuf, 0)
 	rp.Draw(resources.vertCount, 1, resources.firstVertex, 0)
 }
@@ -221,9 +234,13 @@ func (cr *ConvexRenderer) createPipeline() error { //nolint:dupl // GPU pipeline
 	}
 	cr.uniformLayout = uniformLayout
 
+	bgLayouts := []hal.BindGroupLayout{cr.uniformLayout}
+	if cr.clipBindLayout != nil {
+		bgLayouts = append(bgLayouts, cr.clipBindLayout)
+	}
 	pipeLayout, err := cr.device.CreatePipelineLayout(&hal.PipelineLayoutDescriptor{
 		Label:            "convex_pipe_layout",
-		BindGroupLayouts: []hal.BindGroupLayout{cr.uniformLayout},
+		BindGroupLayouts: bgLayouts,
 	})
 	if err != nil {
 		return fmt.Errorf("create convex pipeline layout: %w", err)

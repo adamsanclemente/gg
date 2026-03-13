@@ -49,6 +49,11 @@ type StencilRenderer struct {
 	stencilPipeLayout hal.PipelineLayout
 	coverPipeLayout   hal.PipelineLayout
 
+	// clipBindLayout is the shared @group(1) bind group layout for RRect clip.
+	// Set by the session before createPipelines. Only the cover pipeline needs
+	// it (stencil fill has no color output, so clip is irrelevant there).
+	clipBindLayout hal.BindGroupLayout
+
 	// Render pipelines.
 	// nonZeroStencilPipeline implements the non-zero winding fill rule:
 	// front faces increment stencil, back faces decrement.
@@ -70,6 +75,13 @@ func NewStencilRenderer(device hal.Device, queue hal.Queue) *StencilRenderer {
 		device: device,
 		queue:  queue,
 	}
+}
+
+// SetClipBindLayout sets the bind group layout for the @group(1) RRect clip
+// uniform. Must be called before createPipelines. The layout is owned by the
+// session and must not be destroyed by the renderer.
+func (sr *StencilRenderer) SetClipBindLayout(layout hal.BindGroupLayout) {
+	sr.clipBindLayout = layout
 }
 
 // EnsureTextures creates or recreates the MSAA color, stencil, and resolve textures
@@ -450,22 +462,25 @@ func (sr *StencilRenderer) submitAndReadback(
 // The bufs parameter holds pre-built vertex buffers, uniform buffers, and
 // bind groups for the current path. The fill rule selects between non-zero
 // and even-odd stencil pipelines.
-func (sr *StencilRenderer) RecordPath(rp hal.RenderPassEncoder, bufs *stencilCoverBuffers, fillRule gg.FillRule) {
+func (sr *StencilRenderer) RecordPath(rp hal.RenderPassEncoder, bufs *stencilCoverBuffers, fillRule gg.FillRule, clipBG hal.BindGroup) {
 	// Select stencil pipeline based on fill rule.
 	stencilPipeline := sr.nonZeroStencilPipeline
 	if fillRule == gg.FillRuleEvenOdd {
 		stencilPipeline = sr.evenOddStencilPipeline
 	}
 
-	// Pass 1: Stencil fill.
+	// Pass 1: Stencil fill (clip not needed — only writes stencil buffer).
 	rp.SetPipeline(stencilPipeline)
 	rp.SetBindGroup(0, bufs.stencilBindGroup, nil)
 	rp.SetVertexBuffer(0, bufs.fanVertBuf, 0)
 	rp.Draw(bufs.fanVertexCount, 1, 0, 0)
 
-	// Pass 2: Cover.
+	// Pass 2: Cover (clip applied here — writes color output).
 	rp.SetPipeline(sr.nonZeroCoverPipeline)
 	rp.SetBindGroup(0, bufs.coverBindGroup, nil)
+	if clipBG != nil {
+		rp.SetBindGroup(1, clipBG, nil)
+	}
 	rp.SetVertexBuffer(0, bufs.coverVertBuf, 0)
 	rp.SetStencilReference(0)
 	rp.Draw(6, 1, 0, 0)
