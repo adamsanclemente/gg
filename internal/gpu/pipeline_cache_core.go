@@ -89,8 +89,6 @@ func NewPipelineCacheCore() *PipelineCacheCore {
 //   - The device is nil
 //   - The descriptor is nil
 //   - Pipeline creation fails
-//
-//nolint:dupl // Intentional pattern: same double-check locking for both render and compute pipelines
 func (c *PipelineCacheCore) GetOrCreateRenderPipeline(
 	device *wgpu.Device,
 	desc *RenderPipelineDescriptor,
@@ -147,8 +145,6 @@ func (c *PipelineCacheCore) GetOrCreateRenderPipeline(
 //   - The device is nil
 //   - The descriptor is nil
 //   - Pipeline creation fails
-//
-//nolint:dupl // Intentional pattern: same double-check locking for both render and compute pipelines
 func (c *PipelineCacheCore) GetOrCreateComputePipeline(
 	device *wgpu.Device,
 	desc *ComputePipelineDescriptor,

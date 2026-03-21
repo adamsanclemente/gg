@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.0] - 2026-03-21
+
+### Added
+
+- **Enterprise SVG renderer** (`gg/svg` package) — full SVG XML parser and renderer
+  for JetBrains-quality icon rendering. Supports all JB icon elements: `<path>`,
+  `<circle>`, `<rect>`, `<g>`, `<polygon>`, `<polyline>`, `<line>`, `<ellipse>`.
+  Fill/stroke with evenodd, opacity, transforms (translate/rotate/scale/matrix),
+  ViewBox scaling, color override for theming (`RenderWithColor`). 2054 LOC, 64 tests
+  with 7 real JetBrains SVG icons embedded.
+
+- **SVG path data parser** — `ParseSVGPath(d string)` parses SVG `d` attribute into
+  `*Path`. All commands: M/m, L/l, H/h, V/v, C/c, S/s, Q/q, T/t, A/a, Z/z.
+  Arc-to-cubic conversion per W3C SVG spec F.6.5. 56 tests.
+
+- **Transform-aware path rendering** — `DrawPath(path)` replays parsed path through
+  current CTM (Translate/Scale/Rotate). `FillPath(path)` and `StrokePath(path)` for
+  one-call rendering. Fixes SVG icons invisible when rendered with Push/Translate/Scale.
+
+- **`SetPath`/`AppendPath` + `Path.Append`** — set or append pre-built paths
+  (e.g., from `ParseSVGPath`) to the current context path.
+
+- **ClearType LCD subpixel text rendering pipeline** — dual GPU pipeline (Skia pattern)
+  for LCD subpixel text. CPU rasterizes glyphs at 3x horizontal oversampling with LCD
+  FIR filter, GPU composites per-channel alpha via dedicated `glyph_mask_lcd.wgsl` shader.
+  Separate LCD pipeline avoids Intel Vulkan uniform struct bug. Public API:
+  `dc.SetLCDLayout(gg.LCDLayoutRGB)` / `LCDLayoutBGR` / `LCDLayoutNone`.
+
+- **LCD ClearType text example** (`examples/lcd_text/`) — windowed demo with
+  GPU Tier 6 LCD pipeline via ggcanvas.
+
+### Fixed
+
+- **`BeginAcceleratorFrame` moved from `RenderDirect` to `Draw`** — prevents
+  mid-frame CPU fallback content from being wiped by a second `LoadOpClear`.
+  Fixes first-frame rendering issues in event-driven mode (RENDER-DIRECT-003).
+
+- **Glyph mask atlas sync diagnostic** — warning log when text is silently
+  skipped due to unsynchronized atlas page (`PageTextureView` returns nil).
+
+- **Nearest filtering for glyph mask bitmap atlas** — fixes blurry text
+  when atlas uses linear interpolation.
+
+### Changed
+
+- **Extracted GPU pipeline helpers** — `stencilPassthroughDepthStencil()`,
+  `triangleListPrimitive()`, `defaultMultisample()` eliminate duplicate pipeline
+  descriptor boilerplate across 6 GPU tiers.
+
+### Dependencies
+
+- wgpu v0.21.3 → v0.22.1
+- gpucontext v0.10.0 → v0.11.0
+
 ## [0.37.4] - 2026-03-16
 
 ### Fixed

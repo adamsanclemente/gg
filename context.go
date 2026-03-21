@@ -279,6 +279,25 @@ func (c *Context) TextMode() TextMode {
 	return c.textMode
 }
 
+// SetLCDLayout sets the LCD subpixel layout for ClearType text rendering.
+// Use LCDLayoutRGB for most monitors, LCDLayoutBGR for rare BGR panels,
+// or LCDLayoutNone to disable subpixel rendering (grayscale, the default).
+//
+// When a GPU accelerator is registered and implements LCDLayoutAware,
+// the layout is propagated so the glyph mask engine rasterizes glyphs
+// with 3x horizontal oversampling and the GPU uses the LCD fragment shader.
+//
+// The setting is per-Context. Call this before drawing text.
+func (c *Context) SetLCDLayout(layout LCDLayout) {
+	a := Accelerator()
+	if a == nil {
+		return
+	}
+	if la, ok := a.(LCDLayoutAware); ok {
+		la.SetLCDLayout(layout)
+	}
+}
+
 // Width returns the logical width of the context.
 // This is the coordinate space used by drawing operations.
 // For the physical pixel dimensions, use PixelWidth.
@@ -565,6 +584,80 @@ func (c *Context) ClosePath() {
 // ClearPath clears the current path.
 func (c *Context) ClearPath() {
 	c.path.Clear()
+}
+
+// SetPath replaces the current path with p.
+// The path is copied — subsequent modifications to p do not affect the context.
+// Use this to render pre-built paths (e.g., from ParseSVGPath):
+//
+//	path, _ := gg.ParseSVGPath("M10,10 L90,10 L90,90 Z")
+//	dc.SetPath(path)
+//	dc.Fill()
+func (c *Context) SetPath(p *Path) {
+	c.path.Clear()
+	if p != nil {
+		c.path.Append(p)
+	}
+}
+
+// AppendPath appends the elements of p to the current path without clearing it.
+// This allows combining multiple sub-paths before a single Fill or Stroke call.
+// Note: path coordinates are copied as-is (not transformed by the current matrix).
+// Use DrawPath for transform-aware path rendering.
+func (c *Context) AppendPath(p *Path) {
+	if p != nil {
+		c.path.Append(p)
+	}
+}
+
+// DrawPath replays the elements of p through the current transform matrix,
+// replacing the current path. Unlike SetPath (which copies raw coordinates),
+// DrawPath applies the current matrix (Translate, Scale, Rotate) to all points.
+// After DrawPath, call Fill() or Stroke() to render.
+//
+// This is the correct way to render pre-built paths (e.g., from ParseSVGPath)
+// with transforms:
+//
+//	path, _ := gg.ParseSVGPath("M10,10 L90,10 L90,90 Z")
+//	dc.Push()
+//	dc.Translate(x, y)
+//	dc.Scale(0.5, 0.5)
+//	dc.DrawPath(path)
+//	dc.Fill()
+//	dc.Pop()
+func (c *Context) DrawPath(p *Path) {
+	c.ClearPath()
+	if p == nil {
+		return
+	}
+	for _, elem := range p.Elements() {
+		switch e := elem.(type) {
+		case MoveTo:
+			c.MoveTo(e.Point.X, e.Point.Y)
+		case LineTo:
+			c.LineTo(e.Point.X, e.Point.Y)
+		case QuadTo:
+			c.QuadraticTo(e.Control.X, e.Control.Y, e.Point.X, e.Point.Y)
+		case CubicTo:
+			c.CubicTo(e.Control1.X, e.Control1.Y, e.Control2.X, e.Control2.Y, e.Point.X, e.Point.Y)
+		case Close:
+			c.ClosePath()
+		}
+	}
+}
+
+// FillPath is a convenience method that replays path p through the current
+// transform, fills it, and clears the path. Equivalent to DrawPath(p) + Fill().
+func (c *Context) FillPath(p *Path) error {
+	c.DrawPath(p)
+	return c.Fill()
+}
+
+// StrokePath is a convenience method that replays path p through the current
+// transform, strokes it, and clears the path. Equivalent to DrawPath(p) + Stroke().
+func (c *Context) StrokePath(p *Path) error {
+	c.DrawPath(p)
+	return c.Stroke()
 }
 
 // NewSubPath starts a new subpath without closing the previous one.
